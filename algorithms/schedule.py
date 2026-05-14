@@ -1,8 +1,8 @@
 # schedule.py
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from schedule_step import ScheduleStep
-from process import Processes, Process
+from algorithms.schedule_step import ScheduleStep
+from process.process import Processes, Process
 
 
 @dataclass
