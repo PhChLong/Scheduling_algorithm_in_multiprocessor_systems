@@ -1,0 +1,20 @@
+# Python bytecode (Các file biên dịch tự động của Python)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Môi trường ảo (Virtual Environments - nếu có dùng)
+venv/
+env/
+.venv/
+.env
+
+# Cấu hình của VS Code (Không nên push lên để tránh xung đột với máy người khác)
+.vscode/
+
+# Các file hệ điều hành sinh ra
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
