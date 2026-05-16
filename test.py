@@ -1,14 +1,23 @@
 import algorithms
 import process
 
-p1 = process.Process(1, 0, 10)
-p2 = process.Process(2, 0, 4)
-p3 = process.Process(3, 0, 8)
-p4 = process.Process(4, 0, 5)
-
-processes = process.Processes()
-processes.add(p1)
-processes.add(p2)
-processes.add(p3)
-processes.add(p4)
-
+ps = process.Processes()
+ps.add(process.Process(20, 0, 1))
+ps.add(process.Process(15, 15, 2))
+ps.add(process.Process(12, 30, 1))
+ps.add(process.Process(40, 50, 3))
+ps.add(process.Process(20, 80, 3))
+ps.add(process.Process(30, 90, 2))
+ps.add(process.Process(25, 100, 1))
+ps.add(process.Process(30, 90, 4))
+ps.add(process.Process(20, 105, 2))
+ps.add(process.Process(40, 120, 1))
+print(1)
+schedule = algorithms.GLB_RR(num_cpu=2, time_quantum=10)
+print(2)
+schedule.estimate(ps)
+print(3)
+for i in schedule.steps:
+    print(f"CPU {i}:")
+    for step in schedule.steps[i]:
+        print(f"  {step}")
