@@ -24,7 +24,8 @@ class Schedule(ABC):
         self.avg_turnaround_time: float = 0.0
         self.avg_waiting_time:    float = 0.0
         self.avg_response_time:   float = 0.0
-        self.steps: list[ScheduleStep]  = []
+        self.num_cpu:              int   = 0
+        self.steps: dict[int, list[ScheduleStep]] = {}
 
     @abstractmethod
     def estimate(self, processes: Processes) -> None: ...
