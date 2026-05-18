@@ -16,6 +16,11 @@ class SystemState:
 class Schedule(ABC):
     def __init__(self):
         self.algorithm_name:      str   = ""
+
+        self.num_cpu:              int   = 0
+        self.steps: dict[int, list[ScheduleStep]] = {} # {cpu_id, list_of_scheduleStep}
+        
+        # cập nhật bằng estimate
         self.turnaround_time:     int   = 0
         self.waiting_time:        int   = 0
         self.response_time:       int   = 0
@@ -24,8 +29,6 @@ class Schedule(ABC):
         self.avg_turnaround_time: float = 0.0
         self.avg_waiting_time:    float = 0.0
         self.avg_response_time:   float = 0.0
-        self.num_cpu:              int   = 0
-        self.steps: dict[int, list[ScheduleStep]] = {}
 
     @abstractmethod
     def estimate(self, processes: Processes) -> None: ...

@@ -80,7 +80,7 @@ class Process:
 
 
 class Processes:
-    MAX = 20
+    MAX = 100
 
     def __init__(self):
         self._list: list[Process] = []
