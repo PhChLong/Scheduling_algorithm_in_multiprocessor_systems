@@ -1,4 +1,5 @@
 import algorithms
+
 import process
 
 ps = process.Processes()
@@ -13,20 +14,29 @@ ps.add(process.Process(30, 90, 4))
 ps.add(process.Process(20, 105, 2))
 ps.add(process.Process(40, 120, 1))
 
-schedule = algorithms.GLB_RR(num_cpu=4, time_quantum=15)
-schedule.estimate(ps.copy())
+GLB_RR = algorithms.GLB_RR(num_cpu=4, time_quantum=15)
+GLB_RR.estimate(ps.copy())
 
-schedule1 = algorithms.CPU_Affinity(num_cpu=4, time_quantum=5, hard=True)
-schedule1.estimate(ps.copy())
+CPU_Affinity = algorithms.CPU_Affinity(num_cpu=4, time_quantum=5, hard=True)
+CPU_Affinity.estimate(ps.copy())
 
-print(schedule.algorithm_name)
-for i in schedule.steps:
+load_balancing = algorithms.LoadBalancing(num_cpu= 4)
+load_balancing.estimate(ps.copy())
+
+print(GLB_RR.algorithm_name)
+for i in GLB_RR.steps:
     print(f"CPU {i+1}:")
-    for step in schedule.steps[i]:
+    for step in GLB_RR.steps[i]:
         print(f"  {step}")
 
-print(schedule1.algorithm_name)
-for i in schedule1.steps:
+print(CPU_Affinity.algorithm_name)
+for i in CPU_Affinity.steps:
     print(f"CPU {i+1}:")
-    for step in schedule1.steps[i]:
+    for step in CPU_Affinity.steps[i]:
+        print(f"  {step}")
+    
+print(load_balancing.algorithm_name)
+for i in load_balancing.steps:
+    print(f"CPU {i+1}:")
+    for step in load_balancing.steps[i]:
         print(f"  {step}")
