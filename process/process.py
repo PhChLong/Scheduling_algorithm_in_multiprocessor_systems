@@ -136,3 +136,6 @@ class Processes:
     def view(self):
         for p in self._list:
             print(p)
+            
+    def __len__(self):
+        return len(self._list)

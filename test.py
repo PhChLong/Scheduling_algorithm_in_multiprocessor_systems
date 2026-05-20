@@ -1,18 +1,66 @@
 import algorithms
 
-import process
+from process import Process, Processes
 
-ps = process.Processes()
-ps.add(process.Process(20, 0, 1))
-ps.add(process.Process(15, 15, 2))
-ps.add(process.Process(12, 30, 1))
-ps.add(process.Process(40, 50, 3))
-ps.add(process.Process(20, 80, 3))
-ps.add(process.Process(30, 90, 2))
-ps.add(process.Process(25, 100, 1))
-ps.add(process.Process(30, 90, 4))
-ps.add(process.Process(20, 105, 2))
-ps.add(process.Process(40, 120, 1))
+
+def add_process(ps: Processes, burst_time: int, arrival_time: int, priority: int) -> None:
+    """Them 1 process vao workload test."""
+    ps.add(Process(burst_time, arrival_time, priority))
+
+
+def add_diverse_processes(ps: Processes) -> None:
+    """Tao workload co nhieu kieu arrival/burst de so sanh algorithm ro hon.
+
+    Gom 4 nhom:
+    - mot vai job den som, burst dai de tao nen nen
+    - burst job den cung luc de tao tranh chap CPU
+    - nhieu job ngan xen ke de xem kha nang can bang tai
+    - mot vai job den muon de xem migration/phan bo lai
+    """
+    # Nen dai tu som.
+    add_process(ps, 32, 0, 2)
+    add_process(ps, 26, 0, 4)
+
+    # Burst den cung luc.
+    add_process(ps, 8, 3, 1)
+    add_process(ps, 11, 3, 3)
+    add_process(ps, 5, 3, 2)
+
+    # Nhom ngan, arrival sat nhau.
+    add_process(ps, 4, 6, 5)
+    add_process(ps, 6, 7, 1)
+    add_process(ps, 3, 8, 4)
+    add_process(ps, 7, 9, 2)
+    add_process(ps, 2, 10, 5)
+
+    # Job trung binh xen giua workload.
+    add_process(ps, 14, 12, 2)
+    add_process(ps, 9, 12, 3)
+    add_process(ps, 18, 15, 1)
+    add_process(ps, 10, 16, 4)
+
+    # Job den muon de xem kha nang tai can bang.
+    add_process(ps, 24, 25, 2)
+    add_process(ps, 6, 25, 5)
+    add_process(ps, 15, 28, 3)
+    add_process(ps, 4, 29, 1)
+    add_process(ps, 20, 35, 2)
+    add_process(ps, 5, 36, 4)
+
+
+def print_result(scheduler) -> None:
+    print(scheduler.algorithm_name)
+    for i in scheduler.steps:
+        print(f"CPU {i+1}:")
+        for step in scheduler.steps[i]:
+            print(f"  {step}")
+    print(f"CPU utilization: {scheduler.cpu_utilization:.2%}")
+    print(f"Throughput: {scheduler.throughput:.4f}")
+    print()
+
+
+ps = Processes()
+add_diverse_processes(ps)
 
 GLB_RR = algorithms.GLB_RR(num_cpu=4, time_quantum=15)
 GLB_RR.estimate(ps.copy())
@@ -20,23 +68,9 @@ GLB_RR.estimate(ps.copy())
 CPU_Affinity = algorithms.CPU_Affinity(num_cpu=4, time_quantum=5, hard=True)
 CPU_Affinity.estimate(ps.copy())
 
-load_balancing = algorithms.LoadBalancing(num_cpu= 4)
+load_balancing = algorithms.LoadBalancing(num_cpu=4)
 load_balancing.estimate(ps.copy())
 
-print(GLB_RR.algorithm_name)
-for i in GLB_RR.steps:
-    print(f"CPU {i+1}:")
-    for step in GLB_RR.steps[i]:
-        print(f"  {step}")
-
-print(CPU_Affinity.algorithm_name)
-for i in CPU_Affinity.steps:
-    print(f"CPU {i+1}:")
-    for step in CPU_Affinity.steps[i]:
-        print(f"  {step}")
-    
-print(load_balancing.algorithm_name)
-for i in load_balancing.steps:
-    print(f"CPU {i+1}:")
-    for step in load_balancing.steps[i]:
-        print(f"  {step}")
+print_result(GLB_RR)
+print_result(CPU_Affinity)
+print_result(load_balancing)
