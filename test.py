@@ -12,17 +12,28 @@ ps.add(process.Process(25, 100, 1))
 ps.add(process.Process(30, 90, 4))
 ps.add(process.Process(20, 105, 2))
 ps.add(process.Process(40, 120, 1))
+
 schedule = algorithms.GLB_RR(num_cpu=4, time_quantum=15)
 schedule.estimate(ps.copy())
 schedule1 = algorithms.CPU_Affinity(num_cpu=4, time_quantum=5, hard=True)
 schedule1.estimate(ps.copy())
+schedule2 = algorithms.Work_Stealing(num_cpu=4, time_quantum=5, strat="least_load")
+schedule2.estimate(ps.copy())
+
 print(schedule.algorithm_name)
 for i in schedule.steps:
     print(f"CPU {i+1}:")
     for step in schedule.steps[i]:
         print(f"  {step}")
+
 print(schedule1.algorithm_name)
 for i in schedule1.steps:
     print(f"CPU {i+1}:")
-    for step in schedule1.steps[i]:
+    for step in schedule.steps[i]:
+        print(f"  {step}")
+
+print(schedule2.algorithm_name)
+for i in schedule2.steps:
+    print(f"CPU {i+1}:")
+    for step in schedule.steps[i]:
         print(f"  {step}")
