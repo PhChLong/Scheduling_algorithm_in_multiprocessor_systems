@@ -20,13 +20,17 @@ class LoadBalancing(Schedule):
         self.threshold = threshold
         self.migration_overhead = migration_overhead
         self.cpu_queues = {i: [] for i in range(num_cpu)}
+        self.history: list[dict] = []
+        self.migration_events: list[dict] = []
         self._history: list[dict] = []
 
     def _reset(self):
         """Reset toan bo trang thai mo phong truoc khi estimate bo process moi."""
         self.steps = {i: [] for i in range(self.num_cpu)}
         self.cpu_queues = {i: [] for i in range(self.num_cpu)}
-        self._history = []
+        self.history = []
+        self.migration_events = []
+        self._history = self.history
 
     def _normalize_processes(self, processes: Processes) -> list[Process]:
         """Copy roi sort process theo arrival time.
@@ -79,7 +83,7 @@ class LoadBalancing(Schedule):
 
     def _record_state(self, current_time: int):
         """Luu snapshot queue/load tai moi moc thoi gian de debug hoac ve UI."""
-        self._history.append(
+        self.history.append(
             {
                 "time": current_time,
                 "queues": {
@@ -101,7 +105,7 @@ class LoadBalancing(Schedule):
             next_index += 1
         return next_index
 
-    def _migrate(self, source_cpu_id: int, target_cpu_id: int) -> bool:
+    def _migrate(self, source_cpu_id: int, target_cpu_id: int, current_time: int, reason: str) -> bool:
         """Chuyen mot process dang cho tu source sang target.
 
         Queue dang duoc xu ly theo FIFO nen process dang chay o index 0
@@ -115,6 +119,16 @@ class LoadBalancing(Schedule):
         migrated_process = source_queue.pop()
         migrated_process.remaining_time += self.migration_overhead
         self.cpu_queues[target_cpu_id].append(migrated_process)
+        self.migration_events.append(
+            {
+                "time": current_time,
+                "from_cpu": source_cpu_id,
+                "to_cpu": target_cpu_id,
+                "process_id": migrated_process.id,
+                "reason": reason,
+                "overhead": self.migration_overhead,
+            }
+        )
         return True
 
     def _migration_reduces_imbalance(self, source_cpu_id: int, target_cpu_id: int) -> bool:
@@ -133,7 +147,7 @@ class LoadBalancing(Schedule):
         )
         return new_gap < current_gap
 
-    def push_migration(self):
+    def push_migration(self, current_time: int):
         """CPU ban nhat chu dong day viec sang CPU ranh nhat.
 
         Lap lai cho den khi:
@@ -154,10 +168,10 @@ class LoadBalancing(Schedule):
             if not self._migration_reduces_imbalance(busiest_cpu_id, idlest_cpu_id):
                 return
 
-            if not self._migrate(busiest_cpu_id, idlest_cpu_id):
+            if not self._migrate(busiest_cpu_id, idlest_cpu_id, current_time, "push"):
                 return
 
-    def pull_migration(self, idle_cpu_id):
+    def pull_migration(self, idle_cpu_id: int, current_time: int):
         """Neu mot CPU dang idle, no thu lay viec tu CPU ban nhat."""
         if self.cpu_queues[idle_cpu_id]:
             return False
@@ -172,7 +186,7 @@ class LoadBalancing(Schedule):
         if not self._migration_reduces_imbalance(donor_cpu_id, idle_cpu_id):
             return False
 
-        return self._migrate(donor_cpu_id, idle_cpu_id)
+        return self._migrate(donor_cpu_id, idle_cpu_id, current_time, "pull")
 
     def estimate(self, process: Processes):
         """Chay toan bo mo phong va tra ve cac step da duoc schedule.
@@ -203,12 +217,12 @@ class LoadBalancing(Schedule):
             next_process_index = self._assign_new_arrivals(processes, next_process_index, current_time)
 
             # Rebalance truoc khi CPU chay tick hien tai.
-            self.push_migration()
+            self.push_migration(current_time)
 
             for cpu_id in range(self.num_cpu):
                 # CPU nao dang rong thi thu "keo" viec tu CPU ban hon.
                 if not self.cpu_queues[cpu_id]:
-                    self.pull_migration(cpu_id)
+                    self.pull_migration(cpu_id, current_time)
 
             self._record_state(current_time)
 
