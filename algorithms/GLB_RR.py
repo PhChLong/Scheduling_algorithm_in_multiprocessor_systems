@@ -18,7 +18,7 @@ class GLB_RR(Schedule):
         return None, False
     def estimate(self, processes: Processes) -> None:
         self.steps = {i: [] for i in range(self.num_cpu)}
-        total_burst_time = sum(p.burst_time for p in processes.all())
+        self.cpu_queue = {i: True for i in range(self.num_cpu)}
         processes = processes.sorted_by_arrival()
         cpu = {i: None for i in range(self.num_cpu)}
         cur=0
@@ -63,4 +63,5 @@ class GLB_RR(Schedule):
                     else:
                         queue.append(p)
                      
-        pass
+        self._update_basic_metrics(len(processes))
+        return self.steps

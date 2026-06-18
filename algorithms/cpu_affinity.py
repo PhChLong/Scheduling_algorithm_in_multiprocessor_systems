@@ -19,9 +19,9 @@ class CPU_Affinity(Schedule):
         return None, False
     def estimate(self, processes: Processes) -> None:
         self.steps = {i: [] for i in range(self.num_cpu)}
-        total_burst_time = sum(p.burst_time for p in processes.all())
+        self.cpu_queue = {i: True for i in range(self.num_cpu)}
         processes = processes.sorted_by_arrival()
-        mapping = {p: None for p in processes}
+        mapping = {p.id: None for p in processes}
         cpu = {i: None for i in range(self.num_cpu)}
         cur=0
         id=0
@@ -38,7 +38,7 @@ class CPU_Affinity(Schedule):
                     P_id = -1
                     for i in range(len(queue)):
                         p = queue[i]
-                        if p.id not in mapping or mapping[p.id] == cpu_id:
+                        if mapping[p.id] is None or mapping[p.id] == cpu_id:
                             P = p
                             P_id = i
                             break
@@ -81,4 +81,5 @@ class CPU_Affinity(Schedule):
                     else:
                         queue.append(p)
                      
-        pass
+        self._update_basic_metrics(len(processes))
+        return self.steps
