@@ -35,7 +35,9 @@ class Work_Stealing(Schedule):
             self.local_deque[target].append(p)
     def estimate(self, processes: Processes) -> None:
         self.steps = {i: [] for i in range(self.num_cpu)}
-        total_burst_time = sum(p.burst_time for p in processes.all())
+        self.cpu_queue = {i: True for i in range(self.num_cpu)}
+        self.local_deque = {i: deque() for i in range(self.num_cpu)}
+        self.mapping = {}
         processes = processes.sorted_by_arrival()
         cpu = {i: None for i in range(self.num_cpu)}
         cur = 0
@@ -49,6 +51,7 @@ class Work_Stealing(Schedule):
             for cpu_id in range(self.num_cpu):
                 if self.cpu_queue[cpu_id] and self.local_deque[cpu_id]:
                     p = self.local_deque[cpu_id].popleft()
+                    self.mapping[p.id] = cpu_id
                     run_time = min(self.time_quantum, p.remaining_time)
                     cpu[cpu_id] = [p, run_time, cur]
                     self.cpu_queue[cpu_id] = False
@@ -58,6 +61,7 @@ class Work_Stealing(Schedule):
                     victim = max(range(self.num_cpu), key=lambda i: len(self.local_deque[i]))
                     if victim != cpu_id and self.local_deque[victim]:
                         p = self.local_deque[victim].pop()  # steal từ back
+                        self.mapping[p.id] = cpu_id
                         run_time = min(self.time_quantum, p.remaining_time)
                         cpu[cpu_id] = [p, run_time, cur]
                         self.cpu_queue[cpu_id] = False
@@ -91,4 +95,5 @@ class Work_Stealing(Schedule):
                     else:
                         self.local_deque[cpu_id].append(p)
 
-        pass
+        self._update_basic_metrics(len(processes))
+        return self.steps

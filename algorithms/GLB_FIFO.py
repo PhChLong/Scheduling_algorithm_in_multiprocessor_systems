@@ -1,6 +1,6 @@
 from algorithms.schedule_step import ScheduleStep
 from algorithms.schedule import Schedule
-from process.process import Process,Processes
+from process.process import Processes
 from collections import deque
 class GLB_FIFO(Schedule):
     def __init__(self, num_cpu: int):
@@ -16,7 +16,7 @@ class GLB_FIFO(Schedule):
         return None, False
     def estimate(self, processes: Processes) -> None:
         self.steps = {i: [] for i in range(self.num_cpu)}   
-        total_burst_time = sum(p.burst_time for p in processes.all())
+        self.cpu_queue = {i: True for i in range(self.num_cpu)}
         processes = processes.sorted_by_arrival()
         cpu = {i:None for i in range(self.num_cpu)}
         cur = 0
@@ -32,7 +32,7 @@ class GLB_FIFO(Schedule):
             for cpu_id in range(self.num_cpu):
                 if self.cpu_queue[cpu_id] and queue:
                     p = queue.popleft()
-                    run_time = p.burst_time
+                    run_time = p.remaining_time
                     cpu[cpu_id] = [p, run_time, cur]
                     self.cpu_queue[cpu_id] = False
             
@@ -62,6 +62,7 @@ class GLB_FIFO(Schedule):
                     self.cpu_queue[cpu_id] = True
                     complete_processes += 1
                 
-        pass
+        self._update_basic_metrics(len(processes))
+        return self.steps
     
         

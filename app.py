@@ -283,8 +283,8 @@ def build_live_figure(history: list[dict], pid_map: dict[int, str], num_cpu: int
     if frames:
             fig.update_layout(frames[0]["layout"])
 
-    # ensure global queue label space is visible for non-per-cpu view
-    fig.update_yaxes(range=[-1.5, num_cpu + 0.5])
+    if not show_per_cpu_local_queues:
+        fig.update_yaxes(range=[-1.5, num_cpu + 0.5])
 
     # animation controls
     fig.update_layout(updatemenus=[{"type": "buttons", "buttons": [{"label": "Play", "method": "animate", "args": [None, {"frame": {"duration": 500, "redraw": True}, "fromcurrent": True}]}, {"label": "Pause", "method": "animate", "args": [[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate", "transition": {"duration": 0}}]}], "direction": "left", "pad": {"r": 10, "t": 10}, "showactive": True, "x": 0.1, "y": -0.05}], sliders=[{"active": 0, "y": -0.1, "x": 0.1, "len": 0.9, "currentvalue": {"prefix": "Time: ", "visible": True}, "steps": [{"label": f"{f['name']}", "method": "animate", "args": [[f['name']], {"frame": {"duration": 0, "redraw": True}, "mode": "immediate"}]} for f in frames]}])
@@ -294,10 +294,26 @@ def build_live_figure(history: list[dict], pid_map: dict[int, str], num_cpu: int
     return fig
 
 
-def run_schedulers(processes: Processes, num_cpu: int, rr_quantum: int, affinity_quantum: int, threshold: int, migration_overhead: int):
+def run_schedulers(
+    processes: Processes,
+    num_cpu: int,
+    rr_quantum: int,
+    affinity_quantum: int,
+    work_stealing_quantum: int,
+    work_stealing_strategy: str,
+    threshold: int,
+    migration_overhead: int,
+):
     runners = [
+        algorithms.GLB_FIFO(num_cpu=num_cpu),
         algorithms.GLB_RR(num_cpu=num_cpu, time_quantum=rr_quantum),
+        algorithms.PAR_FIFO(num_cpu=num_cpu),
         algorithms.CPU_Affinity(num_cpu=num_cpu, time_quantum=affinity_quantum, hard=True),
+        algorithms.Work_Stealing(
+            num_cpu=num_cpu,
+            time_quantum=work_stealing_quantum,
+            strat=work_stealing_strategy,
+        ),
         algorithms.LoadBalancing(num_cpu=num_cpu, threshold=threshold, migration_overhead=migration_overhead),
     ]
     for scheduler in runners:
@@ -331,29 +347,48 @@ def render_process_management() -> None:
             process_table_df(),
             num_rows="dynamic",
             use_container_width=True,
+            column_config={
+                "PID": st.column_config.TextColumn("PID", required=True),
+                "Arrival": st.column_config.NumberColumn("Arrival", min_value=0, step=1, required=True),
+                "Burst": st.column_config.NumberColumn("Burst", min_value=1, step=1, required=True),
+                "Priority": st.column_config.NumberColumn("Priority", min_value=1, step=1, required=True),
+            },
             key="process_editor",
         )
         if st.button("Sync Table Changes", use_container_width=True):
-            normalized = edited_df.fillna(0).to_dict(orient="records")
-            st.session_state.process_rows = [
-                {
-                    "PID": str(row["PID"]).strip() or f"P{idx + 1}",
-                    "Arrival": int(row["Arrival"]),
-                    "Burst": max(1, int(row["Burst"])),
-                    "Priority": max(1, int(row["Priority"])),
-                }
-                for idx, row in enumerate(normalized)
-            ]
-            st.success("Table changes synchronized.")
+            try:
+                normalized = edited_df.fillna("").to_dict(orient="records")
+                next_rows = []
+                seen_pids = set()
+                for idx, row in enumerate(normalized):
+                    pid_value = str(row["PID"]).strip() or f"P{idx + 1}"
+                    if pid_value in seen_pids:
+                        st.error(f"Duplicate PID: {pid_value}")
+                        return
+                    seen_pids.add(pid_value)
+                    next_rows.append(
+                        {
+                            "PID": pid_value,
+                            "Arrival": max(0, int(row["Arrival"])),
+                            "Burst": max(1, int(row["Burst"])),
+                            "Priority": max(1, int(row["Priority"])),
+                        }
+                    )
+                st.session_state.process_rows = next_rows
+                st.success("Table changes synchronized.")
+            except (TypeError, ValueError):
+                st.error("Arrival, Burst, and Priority must be valid integers.")
 
 
-def render_static_evaluation(processes: Processes, rows: list[dict[str, Any]], config: dict[str, int]) -> algorithms.LoadBalancing:
+def render_static_evaluation(processes: Processes, rows: list[dict[str, Any]], config: dict[str, Any]):
     st.markdown("## Static Evaluation")
     schedulers = run_schedulers(
         processes=processes,
         num_cpu=config["num_cpu"],
         rr_quantum=config["rr_quantum"],
         affinity_quantum=config["affinity_quantum"],
+        work_stealing_quantum=config["work_stealing_quantum"],
+        work_stealing_strategy=config["work_stealing_strategy"],
         threshold=config["threshold"],
         migration_overhead=config["migration_overhead"],
     )
@@ -397,14 +432,37 @@ def render_static_evaluation(processes: Processes, rows: list[dict[str, Any]], c
     summary_cols[2].metric("Migration Events", str(len(getattr(selected_scheduler, "migration_events", []))))
 
     st.dataframe(pd.DataFrame(metric_rows), use_container_width=True, hide_index=True)
-    #! code hiện tại đang return lại load_balancing để start bước visualize, nhưng bước này cần làm cho mọi algo, cần sửa
-    return next(s for s in schedulers if s.algorithm_name == "Load Balancing")
+    return selected_scheduler
 
 
-def render_queue_snapshot(snapshot: dict[str, Any], events: list[dict[str, Any]], num_cpu: int, pid_map: dict[int, str], show_per_cpu_local_queues: bool = False) -> None:
+def step_history(scheduler, num_cpu: int) -> list[dict[str, Any]]:
+    all_steps = [step for steps in scheduler.steps.values() for step in steps]
+    if not all_steps:
+        return []
+
+    min_time = min(step.begin_time for step in all_steps)
+    max_time = max(step.end_time for step in all_steps)
+    history = []
+    for current_time in range(min_time, max_time):
+        queues = {cpu_id: [] for cpu_id in range(num_cpu)}
+        for cpu_id, steps in scheduler.steps.items():
+            running = [
+                step.process_id
+                for step in steps
+                if step.begin_time <= current_time < step.end_time
+            ]
+            if running:
+                queues[cpu_id] = [running[-1]]
+        history.append({"time": current_time, "queues": queues, "loads": {cpu_id: len(queues[cpu_id]) for cpu_id in range(num_cpu)}})
+    return history
+
+
+def render_queue_snapshot(snapshot: dict[str, Any], events: list[dict[str, Any]] | None, num_cpu: int, pid_map: dict[int, str], show_per_cpu_local_queues: bool = False) -> None:
     header_left, header_right = st.columns([1, 2])
     header_left.metric("Current Time", f"t = {snapshot['time']}")
-    if events:
+    if events is None:
+        header_right.info("Timeline replay from recorded schedule steps.")
+    elif events:
         lines = []
         for event in events:
             pid = pid_map.get(event["process_id"], f"P{event['process_id']}")
@@ -468,27 +526,32 @@ def render_queue_snapshot(snapshot: dict[str, Any], events: list[dict[str, Any]]
                     st.warning(f"{label} | WAITING ({idx + 1})")
 
 
-def render_visualization(load_balancer: algorithms.LoadBalancing, rows: list[dict[str, Any]], num_cpu: int) -> None:
+def render_visualization(scheduler, rows: list[dict[str, Any]], num_cpu: int) -> None:
     st.markdown("## Dynamic Visualization")
-    if not load_balancer.history:
+    has_queue_history = bool(getattr(scheduler, "history", []))
+    history = scheduler.history if has_queue_history else step_history(scheduler, num_cpu)
+    if not history:
         st.info("Run evaluation first to generate simulation history.")
         return
+    if has_queue_history:
+        st.caption(f"Queue replay for {scheduler.algorithm_name}.")
+    else:
+        st.caption(f"Execution replay for {scheduler.algorithm_name}. Queue waiting state is not recorded by this scheduler.")
 
     ordered_rows = sorted(rows, key=lambda item: (item["Arrival"], item["PID"]))
     pid_map = {idx + 1: row["PID"] for idx, row in enumerate(ordered_rows)}
 
     # Small, immediate snapshot control (keeps original UI behaviour)
-    frame_times = [snapshot["time"] for snapshot in load_balancer.history]
-    min_time = min(frame_times)
-    max_time = max(frame_times)
-    selected_time = st.slider("Time Frame", min_value=min_time, max_value=max_time, value=min_time, step=1)
-    snapshot = next(item for item in load_balancer.history if item["time"] == selected_time)
-    events = [event for event in load_balancer.migration_events if event["time"] == selected_time]
-    show_per_cpu = getattr(load_balancer, 'algorithm_name', '') == 'Load Balancing'
+    frame_times = [snapshot["time"] for snapshot in history]
+    selected_time = st.select_slider("Time Frame", options=frame_times, value=frame_times[0])
+    snapshot = next(item for item in history if item["time"] == selected_time)
+    migration_events = getattr(scheduler, "migration_events", None)
+    events = None if migration_events is None else [event for event in migration_events if event["time"] == selected_time]
+    show_per_cpu = getattr(scheduler, 'algorithm_name', '') == 'Load Balancing'
     render_queue_snapshot(snapshot, events, num_cpu, pid_map, show_per_cpu_local_queues=show_per_cpu)
 
     # Build animated figure (client-side frames) and render
-    fig = build_live_figure(load_balancer.history, pid_map, num_cpu, show_per_cpu_local_queues=show_per_cpu)
+    fig = build_live_figure(history, pid_map, num_cpu, show_per_cpu_local_queues=show_per_cpu)
     if fig is None:
         st.info("No visualization frames available.")
         return
@@ -528,6 +591,11 @@ def main() -> None:
         num_cpu = st.slider("CPU Count", min_value=2, max_value=8, value=4, step=1)
         rr_quantum = st.slider("GLB_RR Quantum", min_value=1, max_value=20, value=15, step=1)
         affinity_quantum = st.slider("CPU Affinity Quantum", min_value=1, max_value=20, value=5, step=1)
+        work_stealing_quantum = st.slider("Work Stealing Quantum", min_value=1, max_value=20, value=5, step=1)
+        work_stealing_strategy = st.selectbox(
+            "Work Stealing Strategy",
+            options=["shortest_queue", "least_load", "power_of_two"],
+        )
         threshold = st.slider("Load Balancing Threshold", min_value=0, max_value=20, value=2, step=1)
         migration_overhead = st.slider("Migration Overhead", min_value=0, max_value=10, value=1, step=1)
 
@@ -544,13 +612,15 @@ def main() -> None:
         "num_cpu": num_cpu,
         "rr_quantum": rr_quantum,
         "affinity_quantum": affinity_quantum,
+        "work_stealing_quantum": work_stealing_quantum,
+        "work_stealing_strategy": work_stealing_strategy,
         "threshold": threshold,
         "migration_overhead": migration_overhead,
     }
-    load_balancer = render_static_evaluation(processes, rows, config)
+    selected_scheduler = render_static_evaluation(processes, rows, config)
 
     st.markdown("---")
-    render_visualization(load_balancer, rows, num_cpu)
+    render_visualization(selected_scheduler, rows, num_cpu)
 
 
 if __name__ == "__main__":
