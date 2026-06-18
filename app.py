@@ -17,6 +17,20 @@ DEFAULT_PROCESSES = [
     {"PID": "P4", "Arrival": 3, "Burst": 11, "Priority": 3},
     {"PID": "P5", "Arrival": 3, "Burst": 5, "Priority": 2},
     {"PID": "P6", "Arrival": 6, "Burst": 4, "Priority": 5},
+    {"PID": "P7", "Arrival": 7, "Burst": 6, "Priority": 1},
+    {"PID": "P8", "Arrival": 8, "Burst": 3, "Priority": 4},
+    {"PID": "P9", "Arrival": 9, "Burst": 7, "Priority": 2},
+    {"PID": "P10", "Arrival": 10, "Burst": 2, "Priority": 5},
+    {"PID": "P11", "Arrival": 12, "Burst": 14, "Priority": 2},
+    {"PID": "P12", "Arrival": 12, "Burst": 9, "Priority": 3},
+    {"PID": "P13", "Arrival": 15, "Burst": 18, "Priority": 1},
+    {"PID": "P14", "Arrival": 16, "Burst": 10, "Priority": 4},
+    {"PID": "P15", "Arrival": 25, "Burst": 24, "Priority": 2},
+    {"PID": "P16", "Arrival": 25, "Burst": 6, "Priority": 5},
+    {"PID": "P17", "Arrival": 28, "Burst": 15, "Priority": 3},
+    {"PID": "P18", "Arrival": 29, "Burst": 4, "Priority": 1},
+    {"PID": "P19", "Arrival": 35, "Burst": 20, "Priority": 2},
+    {"PID": "P20", "Arrival": 36, "Burst": 5, "Priority": 4},
 ]
 
 
@@ -43,7 +57,7 @@ def process_table_df() -> pd.DataFrame:
     return pd.DataFrame(st.session_state.process_rows)
 
 
-def add_process_row(pid: str, arrival: int, burst: int, priority: int) -> None:
+def add_or_update_process(pid: str, arrival: int, burst: int, priority: int) -> None:
     new_row = {
         "PID": pid.strip() or f"P{len(st.session_state.process_rows) + 1}",
         "Arrival": int(arrival),
@@ -303,7 +317,7 @@ def render_process_management() -> None:
             priority = st.number_input("Priority", min_value=1, step=1, value=1)
             submitted = st.form_submit_button("Save Process", use_container_width=True)
             if submitted:
-                add_process_row(pid, arrival, burst, priority)
+                add_or_update_process(pid, arrival, burst, priority)
                 st.success(f"Saved {pid.strip() or 'new process'}.")
 
         pid_choices = [row["PID"] for row in st.session_state.process_rows]
@@ -383,6 +397,7 @@ def render_static_evaluation(processes: Processes, rows: list[dict[str, Any]], c
     summary_cols[2].metric("Migration Events", str(len(getattr(selected_scheduler, "migration_events", []))))
 
     st.dataframe(pd.DataFrame(metric_rows), use_container_width=True, hide_index=True)
+    #! code hiện tại đang return lại load_balancing để start bước visualize, nhưng bước này cần làm cho mọi algo, cần sửa
     return next(s for s in schedulers if s.algorithm_name == "Load Balancing")
 
 
@@ -508,6 +523,7 @@ def main() -> None:
     st.caption("CRUD process pool, evaluate multiple schedulers, and replay real load-balancing behavior.")
 
     with st.sidebar:
+        #@ place to add slider for parameters
         st.markdown("## Scheduler Config")
         num_cpu = st.slider("CPU Count", min_value=2, max_value=8, value=4, step=1)
         rr_quantum = st.slider("GLB_RR Quantum", min_value=1, max_value=20, value=15, step=1)
