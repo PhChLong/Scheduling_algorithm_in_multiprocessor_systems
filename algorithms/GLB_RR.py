@@ -63,5 +63,5 @@ class GLB_RR(Schedule):
                     else:
                         queue.append(p)
                      
-        self._update_basic_metrics(len(processes))
+        self._update_basic_metrics(processes)
         return self.steps
