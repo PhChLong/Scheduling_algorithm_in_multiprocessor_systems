@@ -32,3 +32,16 @@ class Schedule(ABC):
 
     @abstractmethod
     def estimate(self, processes: Processes) -> None: ...
+
+    def _update_basic_metrics(self, process_count: int) -> None:
+        total_time = max(
+            (step.end_time for steps in self.steps.values() for step in steps),
+            default=0,
+        )
+        busy_time = sum(
+            step.end_time - step.begin_time
+            for steps in self.steps.values()
+            for step in steps
+        )
+        self.cpu_utilization = 0.0 if total_time == 0 else busy_time / (self.num_cpu * total_time)
+        self.throughput = 0.0 if total_time == 0 else process_count / total_time
