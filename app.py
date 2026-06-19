@@ -11,26 +11,37 @@ from process import Process, Processes
 
 
 DEFAULT_PROCESSES = [
-    {"PID": "P1", "Arrival": 0, "Burst": 32, "Priority": 2},
-    {"PID": "P2", "Arrival": 0, "Burst": 26, "Priority": 4},
-    {"PID": "P3", "Arrival": 3, "Burst": 8, "Priority": 1},
-    {"PID": "P4", "Arrival": 3, "Burst": 11, "Priority": 3},
-    {"PID": "P5", "Arrival": 3, "Burst": 5, "Priority": 2},
-    {"PID": "P6", "Arrival": 6, "Burst": 4, "Priority": 5},
-    {"PID": "P7", "Arrival": 7, "Burst": 6, "Priority": 1},
-    {"PID": "P8", "Arrival": 8, "Burst": 3, "Priority": 4},
-    {"PID": "P9", "Arrival": 9, "Burst": 7, "Priority": 2},
-    {"PID": "P10", "Arrival": 10, "Burst": 2, "Priority": 5},
-    {"PID": "P11", "Arrival": 12, "Burst": 14, "Priority": 2},
-    {"PID": "P12", "Arrival": 12, "Burst": 9, "Priority": 3},
-    {"PID": "P13", "Arrival": 15, "Burst": 18, "Priority": 1},
-    {"PID": "P14", "Arrival": 16, "Burst": 10, "Priority": 4},
-    {"PID": "P15", "Arrival": 25, "Burst": 24, "Priority": 2},
-    {"PID": "P16", "Arrival": 25, "Burst": 6, "Priority": 5},
-    {"PID": "P17", "Arrival": 28, "Burst": 15, "Priority": 3},
-    {"PID": "P18", "Arrival": 29, "Burst": 4, "Priority": 1},
-    {"PID": "P19", "Arrival": 35, "Burst": 20, "Priority": 2},
-    {"PID": "P20", "Arrival": 36, "Burst": 5, "Priority": 4},
+    # --- Lớp 1: Khởi tạo độ lệch pha (Arrival = 0) ---
+    # CPU 0 và 1 sẽ kẹt 15 tick. CPU 2 và 3 chỉ mất 2 tick.
+    {"PID": "P1", "Arrival": 0, "Burst": 15, "Priority": 2},
+    {"PID": "P2", "Arrival": 0, "Burst": 15, "Priority": 4},
+    {"PID": "P3", "Arrival": 0, "Burst": 2,  "Priority": 1},
+    {"PID": "P4", "Arrival": 0, "Burst": 2,  "Priority": 3},
+
+    # --- Lớp 2: Khối bê tông khóa Queue (Arrival = 3) ---
+    # Lúc này CPU 2,3 rảnh nên sẽ ôm P5, P6. CPU 0,1 đang bận nên ôm P7, P8.
+    # Nhờ vậy, CPU 2,3 sẽ luôn hoàn thành các khối bê tông này SỚM HƠN CPU 0,1 khoảng 13 tick.
+    {"PID": "P5", "Arrival": 3, "Burst": 50, "Priority": 2},
+    {"PID": "P6", "Arrival": 3, "Burst": 50, "Priority": 5},
+    {"PID": "P7", "Arrival": 3, "Burst": 50, "Priority": 1},
+    {"PID": "P8", "Arrival": 3, "Burst": 50, "Priority": 4},
+
+    # --- Lớp 3: Các mồi nhử chờ bị Migrate (Arrival rải rác) ---
+    # Những process này sẽ bị dồn ứ lại ở cuối queue.
+    {"PID": "P9",  "Arrival": 5, "Burst": 12, "Priority": 2},
+    {"PID": "P10", "Arrival": 5, "Burst": 12, "Priority": 5},
+    {"PID": "P11", "Arrival": 5, "Burst": 12, "Priority": 2},
+    {"PID": "P12", "Arrival": 5, "Burst": 12, "Priority": 3},
+
+    {"PID": "P13", "Arrival": 7, "Burst": 6,  "Priority": 1},
+    {"PID": "P14", "Arrival": 7, "Burst": 6,  "Priority": 4},
+    {"PID": "P15", "Arrival": 7, "Burst": 6,  "Priority": 2},
+    {"PID": "P16", "Arrival": 7, "Burst": 6,  "Priority": 5},
+
+    {"PID": "P17", "Arrival": 9, "Burst": 3,  "Priority": 3},
+    {"PID": "P18", "Arrival": 9, "Burst": 3,  "Priority": 1},
+    {"PID": "P19", "Arrival": 9, "Burst": 3,  "Priority": 2},
+    {"PID": "P20", "Arrival": 9, "Burst": 3,  "Priority": 4},
 ]
 
 

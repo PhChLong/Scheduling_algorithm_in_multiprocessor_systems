@@ -1,5 +1,6 @@
 from .schedule import Schedule
 from .schedule_step import ScheduleStep
+from collections import deque
 from process.process import Process, Processes
 
 
@@ -19,7 +20,7 @@ class LoadBalancing(Schedule):
         self.num_cpu = num_cpu
         self.threshold = threshold
         self.migration_overhead = migration_overhead
-        self.cpu_queues = {i: [] for i in range(num_cpu)}
+        self.cpu_queues = {i: deque() for i in range(num_cpu)}
         self.history: list[dict] = []
         self.migration_events: list[dict] = []
         self._history: list[dict] = []
@@ -27,7 +28,7 @@ class LoadBalancing(Schedule):
     def _reset(self):
         """Reset toan bo trang thai mo phong truoc khi estimate bo process moi."""
         self.steps = {i: [] for i in range(self.num_cpu)}
-        self.cpu_queues = {i: [] for i in range(self.num_cpu)}
+        self.cpu_queues = {i: deque() for i in range(self.num_cpu)}
         self.history = []
         self.migration_events = []
         self._history = self.history
@@ -57,9 +58,12 @@ class LoadBalancing(Schedule):
             key=lambda cpu_id: (self._cpu_load(cpu_id), len(self.cpu_queues[cpu_id]), cpu_id),
         )
 
-    def _busiest_cpu(self, exclude: int | None = None) -> int | None:
+    def _busiest_cpu(self, exclude: int | None = None, exclude_set: set[int] | None = None) -> int | None:
         """Tra ve CPU ban nhat, co the bo qua mot CPU neu can."""
-        candidates = [cpu_id for cpu_id in range(self.num_cpu) if cpu_id != exclude]
+        excluded = set() if exclude_set is None else set(exclude_set)
+        if exclude is not None:
+            excluded.add(exclude)
+        candidates = [cpu_id for cpu_id in range(self.num_cpu) if cpu_id not in excluded]
         if not candidates:
             return None
         cpu_id = max(candidates, key=lambda idx: (self._cpu_load(idx), len(self.cpu_queues[idx]), -idx))
@@ -97,26 +101,57 @@ class LoadBalancing(Schedule):
             }
         )
 
+    # def _assign_new_arrivals(self, processes: list[Process], next_index: int, current_time: int) -> int:
+    #     """Dua cac process da den vao CPU co tai nho nhat tai thoi diem hien tai."""
+    #     while next_index < len(processes) and processes[next_index].arrival_time <= current_time:
+    #         target_cpu = self._least_loaded_cpu()
+    #         self.cpu_queues[target_cpu].append(processes[next_index])
+    #         next_index += 1
+    #     return next_index
+
     def _assign_new_arrivals(self, processes: list[Process], next_index: int, current_time: int) -> int:
-        """Dua cac process da den vao CPU co tai nho nhat tai thoi diem hien tai."""
         while next_index < len(processes) and processes[next_index].arrival_time <= current_time:
-            target_cpu = self._least_loaded_cpu()
+            target_cpu = next_index % self.num_cpu  # round-robin thay vì least-loaded
             self.cpu_queues[target_cpu].append(processes[next_index])
             next_index += 1
         return next_index
+
+    def _migration_candidate_index(self, source_cpu_id: int) -> int | None:
+        source_queue = self.cpu_queues[source_cpu_id]
+        if len(source_queue) <= 1:
+            return None
+
+        return max(
+            range(1, len(source_queue)),
+            key=lambda index: (
+                source_queue[index].remaining_time,
+                -source_queue[index].arrival_time,
+                -source_queue[index].id,
+            ),
+        )
+
+    def _pop_migration_candidate(self, source_cpu_id: int) -> Process | None:
+        source_queue = self.cpu_queues[source_cpu_id]
+        candidate_index = self._migration_candidate_index(source_cpu_id)
+        if candidate_index is None:
+            return None
+
+        source_queue.rotate(-candidate_index)
+        migrated_process = source_queue.popleft()
+        source_queue.rotate(candidate_index)
+        return migrated_process
 
     def _migrate(self, source_cpu_id: int, target_cpu_id: int, current_time: int, reason: str) -> bool:
         """Chuyen mot process dang cho tu source sang target.
 
         Queue dang duoc xu ly theo FIFO nen process dang chay o index 0
-        khong bi di chuyen. Ham nay lay process cuoi queue de migrate.
+        khong bi di chuyen. Ham nay lay waiting process co remaining_time lon nhat.
         Moi lan migrate se cong them `migration_overhead` vao remaining time.
         """
-        source_queue = self.cpu_queues[source_cpu_id]
-        if len(source_queue) <= 1:
+        migrated_process = self._pop_migration_candidate(source_cpu_id)
+        if migrated_process is None:
             return False
 
-        migrated_process = source_queue.pop()
         migrated_process.remaining_time += self.migration_overhead
         self.cpu_queues[target_cpu_id].append(migrated_process)
         self.migration_events.append(
@@ -137,7 +172,11 @@ class LoadBalancing(Schedule):
         if len(source_queue) <= 1:
             return False
 
-        moved_process = source_queue[-1]
+        candidate_index = self._migration_candidate_index(source_cpu_id)
+        if candidate_index is None:
+            return False
+
+        moved_process = source_queue[candidate_index]
         source_load = self._cpu_load(source_cpu_id)
         target_load = self._cpu_load(target_cpu_id)
         current_gap = abs(source_load - target_load)
@@ -147,7 +186,7 @@ class LoadBalancing(Schedule):
         )
         return new_gap < current_gap
 
-    def push_migration(self, current_time: int):
+    def push_migration(self, current_time: int, max_iterations: int | None = None):
         """CPU ban nhat chu dong day viec sang CPU ranh nhat.
 
         Lap lai cho den khi:
@@ -155,8 +194,13 @@ class LoadBalancing(Schedule):
         - migrate khong con giup can bang hon, hoac
         - khong con process hop le de migrate.
         """
-        while True:
-            busiest_cpu_id = self._busiest_cpu()
+        if max_iterations is None:
+            max_iterations = max(1, self.num_cpu * sum(len(queue) for queue in self.cpu_queues.values()))
+
+        failed_busiest_cpus: set[int] = set()
+
+        for _ in range(max_iterations):
+            busiest_cpu_id = self._busiest_cpu(exclude_set=failed_busiest_cpus)
             idlest_cpu_id = self._least_loaded_cpu()
 
             if busiest_cpu_id is None or busiest_cpu_id == idlest_cpu_id:
@@ -166,27 +210,41 @@ class LoadBalancing(Schedule):
                 return
 
             if not self._migration_reduces_imbalance(busiest_cpu_id, idlest_cpu_id):
-                return
+                failed_busiest_cpus.add(busiest_cpu_id)
+                continue
 
             if not self._migrate(busiest_cpu_id, idlest_cpu_id, current_time, "push"):
-                return
+                failed_busiest_cpus.add(busiest_cpu_id)
+                continue
+        return
 
     def pull_migration(self, idle_cpu_id: int, current_time: int):
         """Neu mot CPU dang idle, no thu lay viec tu CPU ban nhat."""
         if self.cpu_queues[idle_cpu_id]:
             return False
 
-        donor_cpu_id = self._busiest_cpu(exclude=idle_cpu_id)
-        if donor_cpu_id is None:
-            return False
+        failed_donor_cpus = {idle_cpu_id}
+        max_attempts = max(1, self.num_cpu - 1)
 
-        if self._cpu_load(donor_cpu_id) - self._cpu_load(idle_cpu_id) <= 0:
-            return False
+        for _ in range(max_attempts):
+            donor_cpu_id = self._busiest_cpu(exclude_set=failed_donor_cpus)
+            if donor_cpu_id is None:
+                return False
 
-        if not self._migration_reduces_imbalance(donor_cpu_id, idle_cpu_id):
-            return False
+            if len(self.cpu_queues[donor_cpu_id]) <= 1:
+                failed_donor_cpus.add(donor_cpu_id)
+                continue
 
-        return self._migrate(donor_cpu_id, idle_cpu_id, current_time, "pull")
+            if not self._migration_reduces_imbalance(donor_cpu_id, idle_cpu_id):
+                failed_donor_cpus.add(donor_cpu_id)
+                continue
+
+            if self._migrate(donor_cpu_id, idle_cpu_id, current_time, "pull"):
+                return True
+
+            failed_donor_cpus.add(donor_cpu_id)
+
+        return False
 
     def estimate(self, process: Processes):
         """Chay toan bo mo phong va tra ve cac step da duoc schedule.
@@ -210,14 +268,13 @@ class LoadBalancing(Schedule):
         current_time = 0
         next_process_index = 0
         completed_processes = 0
-        busy_ticks = 0
 
         while completed_processes < total_processes:
             # Dua tat ca process da arrival vao queue tai current_time.
             next_process_index = self._assign_new_arrivals(processes, next_process_index, current_time)
 
             # Rebalance truoc khi CPU chay tick hien tai.
-            self.push_migration(current_time)
+            self.push_migration(current_time, max_iterations=max(1, self.num_cpu * total_processes))
 
             for cpu_id in range(self.num_cpu):
                 # CPU nao dang rong thi thu "keo" viec tu CPU ban hon.
@@ -239,7 +296,6 @@ class LoadBalancing(Schedule):
                 running_process = self.cpu_queues[cpu_id][0]
                 running_process.remaining_time -= 1
                 self._append_step(cpu_id, running_process.id, current_time, current_time + 1)
-                busy_ticks += 1
 
             current_time += 1
 
@@ -247,10 +303,8 @@ class LoadBalancing(Schedule):
                 # Sau khi chay xong 1 tick, process nao het time thi remove khoi queue.
                 running_process = self.cpu_queues[cpu_id][0]
                 if running_process.remaining_time <= 0:
-                    self.cpu_queues[cpu_id].pop(0)
+                    self.cpu_queues[cpu_id].popleft()
                     completed_processes += 1
 
-        total_time = current_time
-        self.cpu_utilization = 0.0 if total_time == 0 else busy_ticks / (self.num_cpu * total_time)
-        self.throughput = 0.0 if total_time == 0 else total_processes / total_time
+        self._update_basic_metrics(processes)
         return self.steps
