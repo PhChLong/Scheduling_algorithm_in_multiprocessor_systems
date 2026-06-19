@@ -150,6 +150,15 @@ def timeline_figure(df: pd.DataFrame, num_cpu: int):
     return fig
 
 
+def process_color_map(pid_map: dict[int, str]) -> dict[int, str]:
+    palette = (
+        px.colors.qualitative.Plotly
+        + px.colors.qualitative.Safe
+        + px.colors.qualitative.Dark24
+    )
+    return {pid: palette[index % len(palette)] for index, pid in enumerate(sorted(pid_map))}
+
+
 def build_live_figure(history: list[dict], pid_map: dict[int, str], num_cpu: int, show_per_cpu_local_queues: bool = False):
     """Build a Plotly Figure with animation frames from LoadBalancing.history.
 
@@ -159,9 +168,7 @@ def build_live_figure(history: list[dict], pid_map: dict[int, str], num_cpu: int
     if not history:
             return None
 
-    palette = px.colors.qualitative.Plotly
-    pid_ids = sorted({pid for frame in history for q in frame.get("queues", {}).values() for pid in q})
-    color_map = {pid: palette[i % len(palette)] for i, pid in enumerate(pid_ids)}
+    color_map = process_color_map(pid_map)
 
     frames = []
 
@@ -175,7 +182,10 @@ def build_live_figure(history: list[dict], pid_map: dict[int, str], num_cpu: int
 
             for frame in history:
                 t = frame["time"]
-                shapes = []
+                block_x = []
+                block_y = []
+                block_text = []
+                block_colors = []
                 annotations = []
 
                 # header labels per CPU
@@ -194,17 +204,38 @@ def build_live_figure(history: list[dict], pid_map: dict[int, str], num_cpu: int
                         # stack downwards from header_y-0.6
                         y_top = header_y - 0.6 - idx * 0.9
                         y_bottom = y_top - 0.8
-                        color = color_map.get(pid, "#888")
-                        shapes.append(dict(type="rect", x0=col_x0, x1=col_x1, y0=y_bottom, y1=y_top, line=dict(color="#222", width=1), fillcolor=color))
-                        annotations.append(dict(x=(col_x0 + col_x1) / 2, y=(y_bottom + y_top) / 2, text=pid_map.get(pid, f"P{pid}"), showarrow=False, font=dict(color="#000000")))
+                        block_x.append((col_x0 + col_x1) / 2)
+                        block_y.append((y_bottom + y_top) / 2)
+                        block_text.append(pid_map.get(pid, f"P{pid}"))
+                        block_colors.append(color_map.get(pid, "#888"))
 
-                frame_layout = dict(shapes=shapes, annotations=annotations, title_text=f"t = {t}")
-                frames.append(dict(name=str(t), layout=frame_layout))
+                data = [
+                    go.Scatter(
+                        x=block_x,
+                        y=block_y,
+                        mode="markers+text",
+                        text=block_text,
+                        textposition="middle center",
+                        textfont=dict(color="#000000", size=12),
+                        marker=dict(
+                            symbol="square",
+                            size=54,
+                            color=block_colors,
+                            line=dict(color="#222", width=1),
+                        ),
+                        hoverinfo="text",
+                        showlegend=False,
+                    )
+                ]
+
+                frame_layout = dict(annotations=annotations, title_text=f"t = {t}")
+                frames.append(dict(name=str(t), data=data, layout=frame_layout))
 
             # Build base figure
             x_max = num_cpu * 2
             y_max = max_local_len + 1
-            fig = go.Figure(data=[], layout=dict(xaxis=dict(range=[0, x_max], showgrid=False, visible=False), yaxis=dict(range=[-1, y_max], showgrid=False, visible=False), height=200 + y_max * 60, margin=dict(l=40, r=16, t=40, b=16)), frames=frames)
+            initial_data = frames[0]["data"] if frames else []
+            fig = go.Figure(data=initial_data, layout=dict(xaxis=dict(range=[0, x_max], showgrid=False, visible=False), yaxis=dict(range=[-1, y_max], showgrid=False, visible=False), height=200 + y_max * 60, margin=dict(l=40, r=16, t=40, b=16)), frames=frames)
 
     else:
             # Global queue visualization: need enqueue_times computed across frames
@@ -298,7 +329,69 @@ def build_live_figure(history: list[dict], pid_map: dict[int, str], num_cpu: int
         fig.update_yaxes(range=[-1.5, num_cpu + 0.5])
 
     # animation controls
-    fig.update_layout(updatemenus=[{"type": "buttons", "buttons": [{"label": "Play", "method": "animate", "args": [None, {"frame": {"duration": 500, "redraw": True}, "fromcurrent": True}]}, {"label": "Pause", "method": "animate", "args": [[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate", "transition": {"duration": 0}}]}], "direction": "left", "pad": {"r": 10, "t": 10}, "showactive": True, "x": 0.1, "y": -0.05}], sliders=[{"active": 0, "y": -0.1, "x": 0.1, "len": 0.9, "currentvalue": {"prefix": "Time: ", "visible": True}, "steps": [{"label": f"{f['name']}", "method": "animate", "args": [[f['name']], {"frame": {"duration": 0, "redraw": True}, "mode": "immediate"}]} for f in frames]}])
+    # Keep playback, but jump directly between recorded simulation states.
+    fig.update_layout(
+        updatemenus=[
+            {
+                "type": "buttons",
+                "buttons": [
+                    {
+                        "label": "Play",
+                        "method": "animate",
+                        "args": [
+                            None,
+                            {
+                                "frame": {"duration": 500, "redraw": True},
+                                "fromcurrent": True,
+                                "transition": {"duration": 0},
+                            },
+                        ],
+                    },
+                    {
+                        "label": "Pause",
+                        "method": "animate",
+                        "args": [
+                            [None],
+                            {
+                                "frame": {"duration": 0, "redraw": False},
+                                "mode": "immediate",
+                                "transition": {"duration": 0},
+                            },
+                        ],
+                    },
+                ],
+                "direction": "left",
+                "pad": {"r": 10, "t": 10},
+                "showactive": True,
+                "x": 0.1,
+                "y": -0.05,
+            }
+        ],
+        sliders=[
+            {
+                "active": 0,
+                "y": -0.1,
+                "x": 0.1,
+                "len": 0.9,
+                "currentvalue": {"prefix": "Time: ", "visible": True},
+                "steps": [
+                    {
+                        "label": f"{frame['name']}",
+                        "method": "animate",
+                        "args": [
+                            [frame["name"]],
+                            {
+                                "frame": {"duration": 0, "redraw": True},
+                                "mode": "immediate",
+                                "transition": {"duration": 0},
+                            },
+                        ],
+                    }
+                    for frame in frames
+                ],
+            }
+        ],
+    )
 
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
 

@@ -306,5 +306,8 @@ class LoadBalancing(Schedule):
                     self.cpu_queues[cpu_id].popleft()
                     completed_processes += 1
 
+        if total_processes > 0:
+            self._record_state(current_time)
+
         self._update_basic_metrics(processes)
         return self.steps

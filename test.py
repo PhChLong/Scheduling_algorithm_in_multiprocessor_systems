@@ -99,9 +99,27 @@ def assert_par_fifo_counts_running_load() -> None:
     assert cpu_1_steps == [(2, 1, 2), (3, 2, 3)]
 
 
+def assert_final_queues_empty() -> None:
+    ps = Processes()
+    add_process(ps, 5, 0, 1)
+    add_process(ps, 3, 1, 1)
+    add_process(ps, 4, 2, 1)
+
+    work_stealing = algorithms.Work_Stealing(num_cpu=2, time_quantum=2)
+    work_stealing.estimate(ps)
+    assert all(len(queue) == 0 for queue in work_stealing.local_deque.values())
+
+    load_balancing = algorithms.LoadBalancing(num_cpu=2)
+    load_balancing.estimate(ps)
+    assert all(len(queue) == 0 for queue in load_balancing.cpu_queues.values())
+    assert all(len(queue) == 0 for queue in load_balancing.history[-1]["queues"].values())
+
+
 def run_regression_tests() -> None:
     assert_no_input_mutation()
     assert_par_fifo_counts_running_load()
+    assert_final_queues_empty()
+
 
 
 def main() -> None:
