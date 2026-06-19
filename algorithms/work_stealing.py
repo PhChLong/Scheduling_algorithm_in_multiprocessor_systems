@@ -4,8 +4,9 @@ from algorithms.schedule import Schedule
 
 from collections import deque
 import random as rd
+
 class Work_Stealing(Schedule):
-    def __init__(self, time_quantum: int, num_cpu: int, strat: str = "shortest_queue", migration_overhead: int = 0):
+    def __init__(self, time_quantum: int, num_cpu: int, strat: str = "power_of_two", migration_overhead: int = 0):
         super().__init__()
         self.algorithm_name = "Work_Stealing"
         self.time_quantum = time_quantum
