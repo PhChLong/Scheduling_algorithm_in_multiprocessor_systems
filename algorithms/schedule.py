@@ -33,6 +33,9 @@ class Schedule(ABC):
     @abstractmethod
     def estimate(self, processes: Processes) -> None: ...
 
+    def _copy_sorted_processes(self, processes: Processes) -> list[Process]:
+        return [process.copy() for process in processes.sorted_by_arrival()]
+
     def _update_basic_metrics(self, process_count_or_processes) -> None:
         if isinstance(process_count_or_processes, int):
             process_count = process_count_or_processes

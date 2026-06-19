@@ -38,7 +38,7 @@ class Work_Stealing(Schedule):
         self.cpu_queue = {i: True for i in range(self.num_cpu)}
         self.local_deque = {i: deque() for i in range(self.num_cpu)}
         self.mapping = {}
-        processes = processes.sorted_by_arrival()
+        processes = self._copy_sorted_processes(processes)
         cpu = {i: None for i in range(self.num_cpu)}
         cur = 0
         id = 0
