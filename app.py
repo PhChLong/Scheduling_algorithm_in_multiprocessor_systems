@@ -349,7 +349,6 @@ def run_schedulers(
     affinity_quantum: int,
     work_stealing_quantum: int,
     work_stealing_strategy: str,
-    threshold: int,
     migration_overhead: int,
 ):
     runners = [
@@ -363,7 +362,7 @@ def run_schedulers(
             strat=work_stealing_strategy,
             migration_overhead=migration_overhead,
         ),
-        algorithms.LoadBalancing(num_cpu=num_cpu, threshold=threshold, migration_overhead=migration_overhead),
+        algorithms.LoadBalancing(num_cpu=num_cpu, migration_overhead=migration_overhead),
     ]
     for scheduler in runners:
         scheduler.estimate(processes.copy())
@@ -451,7 +450,6 @@ def render_static_evaluation(processes: Processes, rows: list[dict[str, Any]], c
         affinity_quantum=config["affinity_quantum"],
         work_stealing_quantum=config["work_stealing_quantum"],
         work_stealing_strategy=config["work_stealing_strategy"],
-        threshold=config["threshold"],
         migration_overhead=config["migration_overhead"],
     )
 
@@ -673,8 +671,8 @@ def main() -> None:
             "Work Stealing Strategy",
             options=["shortest_queue", "least_load", "power_of_two"],
         )
-        threshold = st.slider("Load Balancing Threshold", min_value=0, max_value=20, value=2, step=1)
         migration_overhead = st.slider("Migration Overhead", min_value=0, max_value=10, value=1, step=1)
+        st.caption(f"Load Balancing Threshold: {max(1, 2 * migration_overhead)}")
 
     render_process_management()
 
@@ -695,7 +693,6 @@ def main() -> None:
         "affinity_quantum": affinity_quantum,
         "work_stealing_quantum": work_stealing_quantum,
         "work_stealing_strategy": work_stealing_strategy,
-        "threshold": threshold,
         "migration_overhead": migration_overhead,
     }
     selected_scheduler = render_static_evaluation(processes, rows, config)

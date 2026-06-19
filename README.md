@@ -7,7 +7,7 @@ Trình mô phỏng đặt lịch CPU trên hệ đa bộ xử lý (multiprocesso
 Tính năng chính
 ---------------
 - Nhiều thuật toán lập lịch: GLB_RR, GLB_FIFO, PAR_FIFO, CPU_Affinity, LoadBalancing, Work_Stealing
-- Mô phỏng push/pull migration, migration overhead
+- Mô phỏng push migration và migration overhead
 - Dashboard Streamlit (app.py) để tương tác, cấu hình và xem timeline
 - Script demo `test.py` để chạy mẫu và in kết quả
 
@@ -38,6 +38,5 @@ Chạy demo console:
 ```powershell
 python test.py
 ```
-
 
 

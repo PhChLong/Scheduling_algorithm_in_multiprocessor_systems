@@ -162,7 +162,7 @@ Main characteristics:
 
 #### 2.2.6. Dynamic Load Balancing (`LoadBalancing`)
 
-The Load Balancing scheduler maintains one FIFO queue per CPU and combines proactive push migration with idle-CPU pull migration.
+The Load Balancing scheduler maintains one FIFO queue per CPU and uses proactive push migration.
 
 New processes are currently distributed in round-robin order:
 
@@ -180,22 +180,16 @@ Push migration:
 
 1. Find the busiest CPU.
 2. Find the least-loaded CPU.
-3. Check whether their load difference exceeds the threshold.
+3. Check whether their load difference exceeds `max(1, 2 * migration_overhead)`.
 4. Select a waiting process from the busiest CPU.
 5. Migrate it only if the predicted load difference becomes smaller.
-
-Pull migration:
-
-1. Detect an idle CPU.
-2. Find a busy donor CPU with waiting work.
-3. Move a waiting process if the migration improves balance.
 
 The running process is never migrated. Migration candidates are selected from waiting processes, preferring the process with the greatest remaining time. Migration overhead is added to the process's remaining time.
 
 Strengths:
 
 - Corrects load imbalance after initial assignment.
-- Combines proactive and idle-driven migration.
+- Uses proactive migration before each execution tick.
 - Avoids migrating the currently running process.
 - Rejects migrations that do not improve the load difference.
 - Records migration events and detailed queue history.
@@ -252,7 +246,7 @@ Scheduler configuration includes:
 | CPU Affinity Quantum | Time slice for CPU Affinity |
 | Work Stealing Quantum | Time slice for Work Stealing |
 | Work Stealing Strategy | Initial local-queue placement strategy |
-| Load Balancing Threshold | Minimum load difference before push migration |
+| Load Balancing Threshold | Derived as `max(1, 2 * migration_overhead)` |
 | Migration Overhead | Additional execution time caused by migration |
 
 The dashboard begins with a default workload of 20 processes designed to create uneven CPU loads and observable migration behavior.
@@ -328,7 +322,6 @@ Response time = first execution time − arrival time
 | `_migrate()` | Moves a process and records migration overhead/event data |
 | `_migration_reduces_imbalance()` | Predicts whether migration improves balance |
 | `push_migration()` | Proactively moves work away from overloaded CPUs |
-| `pull_migration()` | Allows an idle CPU to obtain waiting work |
 | `estimate()` | Executes the complete load-balancing simulation |
 
 #### Interface and Visualization Functions
@@ -386,7 +379,7 @@ The table is stored in Streamlit session state so it remains available when the 
 
 ### 3.2. Scheduler Configuration
 
-The sidebar contains sliders and selectors for CPU count, time quanta, work-stealing strategy, load-balancing threshold, and migration overhead.
+The sidebar contains sliders and selectors for CPU count, time quanta, work-stealing strategy, and migration overhead. The load-balancing threshold is calculated automatically.
 
 Changing a setting causes all schedulers to run again using the updated configuration.
 
@@ -427,7 +420,7 @@ The following contribution summary is derived from the repository's Git commit h
 
 | Team Member / Git Identity | Main Contributions |
 |---|---|
-| PhChLong | Created and developed the Load Balancing algorithm; implemented push/pull migration, migration history, metrics integration, Streamlit visualization, queue replay, bug fixes, and shared scheduler-history improvements |
+| PhChLong | Created and developed the Load Balancing algorithm; implemented push migration, migration history, metrics integration, Streamlit visualization, queue replay, bug fixes, and shared scheduler-history improvements |
 | trantatdat123 | Implemented Global Round Robin and CPU Affinity; contributed the package structure, shared scheduling classes, tests, application interface changes, README documentation, and integration work |
 | Hong Nam | Implemented Global FIFO and Partitioned FIFO |
 | dduhC | Implemented Work Stealing and contributed later Work Stealing bug fixes and tests |
@@ -464,4 +457,3 @@ The team used a modular structure so each scheduling algorithm could be develope
 8. Plotly, “Animations in Python,” *Plotly Python Documentation*. [https://plotly.com/python/animations/](https://plotly.com/python/animations/)
 
 9. Project source code and Git history, “Scheduling Algorithm in Multiprocessor Systems,” local repository, accessed June 19, 2026.
-

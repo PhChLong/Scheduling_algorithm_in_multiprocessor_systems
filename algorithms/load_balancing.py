@@ -8,19 +8,18 @@ class LoadBalancing(Schedule):
     """Scheduler mo phong can bang tai tren nhieu CPU.
 
     Moi CPU co mot queue FIFO rieng.
-    Process moi se duoc dua vao CPU co tong tai nho nhat.
-    Trong luc chay, thuat toan co 2 kieu migration:
-    - push: CPU ban nhat day bot viec sang CPU ranh nhat
-    - pull: CPU dang idle di "keo" viec tu CPU ban nhat
+    Process moi duoc phan phoi round-robin.
+    Trong luc chay, CPU ban nhat chu dong day bot waiting process
+    sang CPU co tong tai nho nhat khi load gap vuot threshold.
     """
 
-    def __init__(self, num_cpu: int = 4, threshold: int = 2, migration_overhead: int = 1):
+    def __init__(self, num_cpu: int = 4, migration_overhead: int = 1):
         super().__init__()
         self.algorithm_name = "Load Balancing"
         self.num_cpu = num_cpu
         self.queue_scope = "local"
-        self.threshold = threshold
         self.migration_overhead = migration_overhead
+        self.threshold = max(1, 2 * migration_overhead)
         self.cpu_queues = {i: deque() for i in range(num_cpu)}
         self.history: list[dict] = []
         self.migration_events: list[dict] = []
@@ -223,44 +222,15 @@ class LoadBalancing(Schedule):
                 continue
         return
 
-    def pull_migration(self, idle_cpu_id: int, current_time: int):
-        """Neu mot CPU dang idle, no thu lay viec tu CPU ban nhat."""
-        if self.cpu_queues[idle_cpu_id]:
-            return False
-
-        failed_donor_cpus = {idle_cpu_id}
-        max_attempts = max(1, self.num_cpu - 1)
-
-        for _ in range(max_attempts):
-            donor_cpu_id = self._busiest_cpu(exclude_set=failed_donor_cpus)
-            if donor_cpu_id is None:
-                return False
-
-            if len(self.cpu_queues[donor_cpu_id]) <= 1:
-                failed_donor_cpus.add(donor_cpu_id)
-                continue
-
-            if not self._migration_reduces_imbalance(donor_cpu_id, idle_cpu_id):
-                failed_donor_cpus.add(donor_cpu_id)
-                continue
-
-            if self._migrate(donor_cpu_id, idle_cpu_id, current_time, "pull"):
-                return True
-
-            failed_donor_cpus.add(donor_cpu_id)
-
-        return False
-
     def estimate(self, process: Processes):
         """Chay toan bo mo phong va tra ve cac step da duoc schedule.
 
-        Moi vong lap thoi gian se lam 6 buoc:
+        Moi vong lap thoi gian se lam 5 buoc:
         1. Dua process moi den vao queue
         2. Thu push migration de can bang toan cuc
-        3. Cho CPU idle thu pull migration
-        4. Luu lai state hien tai
-        5. Moi CPU dang co viec chay 1 tick
-        6. Loai process vua hoan thanh ra khoi queue
+        3. Luu lai state hien tai
+        4. Moi CPU dang co viec chay 1 tick
+        5. Loai process vua hoan thanh ra khoi queue
 
         Cuoi cung tinh them:
         - cpu_utilization = so CPU-tick co lam viec / tong CPU-tick
@@ -280,11 +250,6 @@ class LoadBalancing(Schedule):
 
             # Rebalance truoc khi CPU chay tick hien tai.
             self.push_migration(current_time, max_iterations=max(1, self.num_cpu * total_processes))
-
-            for cpu_id in range(self.num_cpu):
-                # CPU nao dang rong thi thu "keo" viec tu CPU ban hon.
-                if not self.cpu_queues[cpu_id]:
-                    self.pull_migration(cpu_id, current_time)
 
             self._record_state(current_time)
 

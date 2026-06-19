@@ -135,6 +135,22 @@ def assert_load_balancing_history_separates_running_from_queue() -> None:
             assert running_pid not in snapshot["queues"][cpu_id]
 
 
+def assert_load_balancing_uses_push_only_and_derived_threshold() -> None:
+    assert algorithms.LoadBalancing(num_cpu=2, migration_overhead=0).threshold == 1
+    scheduler = algorithms.LoadBalancing(num_cpu=2, migration_overhead=3)
+    assert scheduler.threshold == 6
+    assert not hasattr(scheduler, "pull_migration")
+
+    ps = Processes()
+    add_process(ps, 10, 0, 1)
+    add_process(ps, 1, 0, 1)
+    add_process(ps, 1, 0, 1)
+    scheduler.estimate(ps)
+
+    assert scheduler.migration_events
+    assert all(event["reason"] == "push" for event in scheduler.migration_events)
+
+
 def assert_all_schedulers_record_queue_history() -> None:
     ps = Processes()
     add_process(ps, 6, 0, 1)
@@ -188,6 +204,7 @@ def run_regression_tests() -> None:
     assert_par_fifo_counts_running_load()
     assert_final_queues_empty()
     assert_load_balancing_history_separates_running_from_queue()
+    assert_load_balancing_uses_push_only_and_derived_threshold()
     assert_all_schedulers_record_queue_history()
 
 

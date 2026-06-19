@@ -5,7 +5,7 @@ Expected results were measured with the dashboard defaults:
 - GLB_RR quantum: 15
 - CPU Affinity quantum: 5
 - Work Stealing quantum: 5, strategy: shortest_queue
-- Load Balancing threshold: 2
+- Load Balancing threshold: max(1, 2 * migration overhead) = 2
 - Migration overhead: 1
 
 Changing those parameters can change the ranking, which is useful for further
@@ -87,7 +87,7 @@ PROCESSES_5 = _processes(
 PROCESSES_6 = _processes([12] * 20)
 
 # A second Load Balancing-friendly workload. Long jobs arrive in different
-# waves, allowing push/pull migration to correct temporary queue imbalance.
+# waves, allowing push migration to correct temporary queue imbalance.
 PROCESSES_7 = _processes(
     [20, 5, 3, 10, 1, 50, 10, 1, 10, 10, 3, 1, 20, 10, 80, 80],
     [0, 30, 5, 5, 0, 20, 5, 20, 20, 10, 20, 5, 0, 20, 20, 0],
@@ -173,7 +173,7 @@ PROCESS_SET_OPTIONS = {
     "Set 7 — Load Balancing with arrival waves": {
         "processes": PROCESSES_7,
         "expected": "LB 107; WS 110; RR 115; FIFO/PAR 119; Affinity 211",
-        "reason": "Push and pull migration correct temporary imbalance across waves.",
+        "reason": "Push migration corrects temporary imbalance across waves.",
     },
     "Set 8 — FIFO/PAR_FIFO arrival waves": {
         "processes": PROCESSES_8,

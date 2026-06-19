@@ -19,7 +19,7 @@ Multiprocessor CPU scheduling simulator and Streamlit dashboard. The project mod
 - `algorithms/PAR_FIFO.py`: Per-CPU FIFO scheduler.
 - `algorithms/cpu_affinity.py`: Round-robin scheduler with CPU affinity.
 - `algorithms/work_stealing.py`: Per-CPU deque scheduler with idle CPU stealing.
-- `algorithms/load_balancing.py`: Per-CPU queue scheduler with push/pull migration and queue history.
+- `algorithms/load_balancing.py`: Per-CPU queue scheduler with push migration and queue history.
 - `algorithms/__init__.py`: Public exports for scheduler classes.
 
 ## Process Model
@@ -134,13 +134,13 @@ Work-stealing scheduler with local deques.
 
 ### LoadBalancing
 
-Per-CPU FIFO queue scheduler with push/pull migration.
+Per-CPU FIFO queue scheduler with proactive push migration.
 
 - Uses one FIFO queue per CPU.
 - New arrivals are currently assigned round-robin by process index (`next_index % num_cpu`). Older comments mention least-loaded assignment, but that implementation is commented out.
 - Queue load is the sum of `remaining_time` for every process in a CPU queue.
 - Push migration moves waiting work from a busy CPU to the least-loaded CPU when the load gap exceeds `threshold`.
-- Pull migration lets an idle CPU take waiting work from a busy CPU.
+- `threshold` is derived as `max(1, 2 * migration_overhead)`.
 - Migration never moves the currently running process at queue index `0`.
 - Migration selects the waiting process with the largest `remaining_time`, with arrival time and ID tie-breakers.
 - Migration adds `migration_overhead` to the moved process's `remaining_time`.
@@ -153,7 +153,7 @@ Per-CPU FIFO queue scheduler with push/pull migration.
 1. `ensure_state()` initializes a default workload in Streamlit session state.
 2. The user can add, delete, or edit process rows.
 3. `build_processes()` converts UI rows into a `Processes` object sorted by arrival time and PID label.
-4. Sidebar controls CPU count, GLB round-robin quantum, affinity quantum, work-stealing quantum/strategy, load-balancing threshold, and migration overhead.
+4. Sidebar controls CPU count, GLB round-robin quantum, affinity quantum, work-stealing quantum/strategy, and migration overhead. The load-balancing threshold is derived automatically.
 5. `run_schedulers()` runs:
    - `GLB_FIFO`
    - `GLB_RR`

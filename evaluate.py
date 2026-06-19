@@ -18,7 +18,6 @@ RR_QUANTUM = 15
 AFFINITY_QUANTUM = 5
 WORK_STEALING_QUANTUM = 5
 WORK_STEALING_STRATEGY = "shortest_queue"
-LOAD_BALANCING_THRESHOLD = 2
 MIGRATION_OVERHEAD = 1
 PREEMPTIVE_LOAD_BALANCING_QUANTUM = 5
 
@@ -68,7 +67,6 @@ def create_schedulers() -> list:
         ),
         algorithms.LoadBalancing(
             num_cpu=NUM_CPU,
-            threshold=LOAD_BALANCING_THRESHOLD,
             migration_overhead=MIGRATION_OVERHEAD,
         ),
     ]
