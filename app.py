@@ -7,48 +7,16 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import algorithms
+from Process_options import *
 from process import Process, Processes
 from process.process import InvalidInputError, MaxProcessesError
 
 
-DEFAULT_PROCESSES = [
-    # --- Lớp 1: Khởi tạo độ lệch pha (Arrival = 0) ---
-    # CPU 0 và 1 sẽ kẹt 15 tick. CPU 2 và 3 chỉ mất 2 tick.
-    {"PID": "P1", "Arrival": 0, "Burst": 15, "Priority": 2},
-    {"PID": "P2", "Arrival": 0, "Burst": 15, "Priority": 4},
-    {"PID": "P3", "Arrival": 0, "Burst": 2,  "Priority": 1},
-    {"PID": "P4", "Arrival": 0, "Burst": 2,  "Priority": 3},
-
-    # --- Lớp 2: Khối bê tông khóa Queue (Arrival = 3) ---
-    # Lúc này CPU 2,3 rảnh nên sẽ ôm P5, P6. CPU 0,1 đang bận nên ôm P7, P8.
-    # Nhờ vậy, CPU 2,3 sẽ luôn hoàn thành các khối bê tông này SỚM HƠN CPU 0,1 khoảng 13 tick.
-    {"PID": "P5", "Arrival": 3, "Burst": 50, "Priority": 2},
-    {"PID": "P6", "Arrival": 3, "Burst": 50, "Priority": 5},
-    {"PID": "P7", "Arrival": 3, "Burst": 50, "Priority": 1},
-    {"PID": "P8", "Arrival": 3, "Burst": 50, "Priority": 4},
-
-    # --- Lớp 3: Các mồi nhử chờ bị Migrate (Arrival rải rác) ---
-    # Những process này sẽ bị dồn ứ lại ở cuối queue.
-    {"PID": "P9",  "Arrival": 5, "Burst": 12, "Priority": 2},
-    {"PID": "P10", "Arrival": 5, "Burst": 12, "Priority": 5},
-    {"PID": "P11", "Arrival": 5, "Burst": 12, "Priority": 2},
-    {"PID": "P12", "Arrival": 5, "Burst": 12, "Priority": 3},
-
-    {"PID": "P13", "Arrival": 7, "Burst": 6,  "Priority": 1},
-    {"PID": "P14", "Arrival": 7, "Burst": 6,  "Priority": 4},
-    {"PID": "P15", "Arrival": 7, "Burst": 6,  "Priority": 2},
-    {"PID": "P16", "Arrival": 7, "Burst": 6,  "Priority": 5},
-
-    {"PID": "P17", "Arrival": 9, "Burst": 3,  "Priority": 3},
-    {"PID": "P18", "Arrival": 9, "Burst": 3,  "Priority": 1},
-    {"PID": "P19", "Arrival": 9, "Burst": 3,  "Priority": 2},
-    {"PID": "P20", "Arrival": 9, "Burst": 3,  "Priority": 4},
-]
-
-
 def ensure_state() -> None:
     if "process_rows" not in st.session_state:
-        st.session_state.process_rows = DEFAULT_PROCESSES.copy()
+        st.session_state.process_rows = [row.copy() for row in PROCESSES_1]
+    if "process_editor_revision" not in st.session_state:
+        st.session_state.process_editor_revision = 0
 
 
 def build_processes(rows: list[dict[str, Any]]) -> Processes:
@@ -437,7 +405,7 @@ def render_process_management() -> None:
                 "Burst": st.column_config.NumberColumn("Burst", min_value=1, step=1, required=True),
                 "Priority": st.column_config.NumberColumn("Priority", min_value=1, step=1, required=True),
             },
-            key="process_editor",
+            key=f"process_editor_{st.session_state.process_editor_revision}",
         )
         if st.button("Sync Table Changes", width="stretch"):
             try:
@@ -680,6 +648,21 @@ def main() -> None:
     st.caption("CRUD process pool, evaluate multiple schedulers, and replay real load-balancing behavior.")
 
     with st.sidebar:
+        st.markdown("## Process Workload")
+        selected_process_set = st.selectbox(
+            "Benchmark Set",
+            options=list(PROCESS_SET_OPTIONS),
+        )
+        selected_process_info = PROCESS_SET_OPTIONS[selected_process_set]
+        st.caption(selected_process_info["reason"])
+        st.caption(f"Expected makespan with default settings: {selected_process_info['expected']}")
+        if st.button("Load Selected Set", width="stretch"):
+            st.session_state.process_rows = [
+                row.copy() for row in selected_process_info["processes"]
+            ]
+            st.session_state.process_editor_revision += 1
+            st.rerun()
+
         #@ place to add slider for parameters
         st.markdown("## Scheduler Config")
         num_cpu = st.slider("CPU Count", min_value=2, max_value=8, value=4, step=1)
