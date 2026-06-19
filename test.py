@@ -71,6 +71,10 @@ CPU_Affinity.estimate(ps.copy())
 load_balancing = algorithms.LoadBalancing(num_cpu=4)
 load_balancing.estimate(ps.copy())
 
-print_result(GLB_RR)
-print_result(CPU_Affinity)
-print_result(load_balancing)
+work_stealing = algorithms.Work_Stealing(num_cpu=4, time_quantum=5, strat="shortest_queue")
+work_stealing.estimate(ps.copy())
+
+# print_result(GLB_RR)
+# print_result(CPU_Affinity)
+# print_result(load_balancing)
+print_result(work_stealing)

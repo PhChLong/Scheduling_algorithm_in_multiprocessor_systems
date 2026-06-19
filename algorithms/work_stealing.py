@@ -5,12 +5,13 @@ from algorithms.schedule import Schedule
 from collections import deque
 import random as rd
 class Work_Stealing(Schedule):
-    def __init__(self, time_quantum: int, num_cpu: int, strat: str = "shortest_queue"):
+    def __init__(self, time_quantum: int, num_cpu: int, strat: str = "shortest_queue", migration_overhead: int = 0):
         super().__init__()
         self.algorithm_name = "Work_Stealing"
         self.time_quantum = time_quantum
         self.num_cpu = num_cpu
         self.strat = strat
+        self.migration_overhead = migration_overhead
         self.cpu_queue = {i: True for i in range(self.num_cpu)}  # True = rảnh, False = bận
         self.local_deque = {i: deque() for i in range(num_cpu)}
         self.mapping = {}   #process_id -> cpu_id
@@ -24,7 +25,7 @@ class Work_Stealing(Schedule):
             target = min(self.local_deque, key=lambda cpu_id: len(self.local_deque[cpu_id]))
             self.local_deque[target].append(p)
         elif self.strat == "least_load":
-            target = min(self.local_deque, key=lambda cpu_id: sum([i.remaining_time for i in self.local_deque[cpu_id]]))
+            target = min(self.local_deque, key=lambda cpu_id: sum(i.remaining_time for i in self.local_deque[cpu_id]))
             self.local_deque[target].append(p)  
         elif self.strat == "power_of_two":
             if self.num_cpu == 1:
@@ -61,6 +62,7 @@ class Work_Stealing(Schedule):
                     victim = max(range(self.num_cpu), key=lambda i: len(self.local_deque[i]))
                     if victim != cpu_id and self.local_deque[victim]:
                         p = self.local_deque[victim].pop()  # steal từ back
+                        p.remaining_time += self.migration_overhead
                         self.mapping[p.id] = cpu_id
                         run_time = min(self.time_quantum, p.remaining_time)
                         cpu[cpu_id] = [p, run_time, cur]
