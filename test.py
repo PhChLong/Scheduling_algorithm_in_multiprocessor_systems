@@ -59,22 +59,70 @@ def print_result(scheduler) -> None:
     print()
 
 
-ps = Processes()
-add_diverse_processes(ps)
+def assert_no_input_mutation() -> None:
+    ps = Processes()
+    add_process(ps, 5, 0, 1)
+    add_process(ps, 3, 0, 1)
+    original_remaining = [p.remaining_time for p in ps.all()]
 
-GLB_RR = algorithms.GLB_RR(num_cpu=4, time_quantum=15)
-GLB_RR.estimate(ps.copy())
+    schedulers = [
+        algorithms.GLB_FIFO(num_cpu=2),
+        algorithms.GLB_RR(num_cpu=2, time_quantum=2),
+        algorithms.PAR_FIFO(num_cpu=2),
+        algorithms.CPU_Affinity(num_cpu=2, time_quantum=2, hard=True),
+        algorithms.Work_Stealing(num_cpu=2, time_quantum=2),
+    ]
 
-CPU_Affinity = algorithms.CPU_Affinity(num_cpu=4, time_quantum=5, hard=True)
-CPU_Affinity.estimate(ps.copy())
+    for scheduler in schedulers:
+        scheduler.estimate(ps)
+        assert [p.remaining_time for p in ps.all()] == original_remaining
 
-load_balancing = algorithms.LoadBalancing(num_cpu=4)
-load_balancing.estimate(ps.copy())
+    rr = algorithms.GLB_RR(num_cpu=2, time_quantum=2)
+    rr.estimate(ps)
+    assert all(
+        step.begin_time < step.end_time
+        for steps in rr.steps.values()
+        for step in steps
+    )
 
-work_stealing = algorithms.Work_Stealing(num_cpu=4, time_quantum=5, strat="shortest_queue")
-work_stealing.estimate(ps.copy())
 
-# print_result(GLB_RR)
-# print_result(CPU_Affinity)
-# print_result(load_balancing)
-print_result(work_stealing)
+def assert_par_fifo_counts_running_load() -> None:
+    ps = Processes()
+    add_process(ps, 100, 0, 1)
+    add_process(ps, 1, 1, 1)
+    add_process(ps, 1, 1, 1)
+
+    scheduler = algorithms.PAR_FIFO(num_cpu=2)
+    scheduler.estimate(ps)
+
+    cpu_1_steps = [(step.process_id, step.begin_time, step.end_time) for step in scheduler.steps[1]]
+    assert cpu_1_steps == [(2, 1, 2), (3, 2, 3)]
+
+
+def run_regression_tests() -> None:
+    assert_no_input_mutation()
+    assert_par_fifo_counts_running_load()
+
+
+def main() -> None:
+    run_regression_tests()
+
+    ps = Processes()
+    add_diverse_processes(ps)
+
+    GLB_RR = algorithms.GLB_RR(num_cpu=4, time_quantum=15)
+    GLB_RR.estimate(ps.copy())
+
+    CPU_Affinity = algorithms.CPU_Affinity(num_cpu=4, time_quantum=5, hard=True)
+    CPU_Affinity.estimate(ps.copy())
+
+    load_balancing = algorithms.LoadBalancing(num_cpu=4)
+    load_balancing.estimate(ps.copy())
+
+    print_result(GLB_RR)
+    print_result(CPU_Affinity)
+    print_result(load_balancing)
+
+
+if __name__ == "__main__":
+    main()

@@ -20,7 +20,7 @@ class CPU_Affinity(Schedule):
     def estimate(self, processes: Processes) -> None:
         self.steps = {i: [] for i in range(self.num_cpu)}
         self.cpu_queue = {i: True for i in range(self.num_cpu)}
-        processes = processes.sorted_by_arrival()
+        processes = self._copy_sorted_processes(processes)
         mapping = {p.id: None for p in processes}
         cpu = {i: None for i in range(self.num_cpu)}
         cur=0

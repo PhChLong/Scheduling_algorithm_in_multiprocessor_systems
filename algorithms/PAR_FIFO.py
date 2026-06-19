@@ -20,24 +20,26 @@ class PAR_FIFO(Schedule):
     def estimate(self, processes: Processes) -> None:
         self.steps = {i: [] for i in range(self.num_cpu)}
         self.cpu_queue = {i: True for i in range(self.num_cpu)}
-        processes = processes.sorted_by_arrival()
+        processes = self._copy_sorted_processes(processes)
         cpu = {i:None for i in range(self.num_cpu)}
         cur = 0
         id = 0
         complete_processes = 0
         
         local_queues = {i: deque() for i in range(self.num_cpu)}
-        
-        cpu_workloader = {i: 0 for i in range(self.num_cpu)} 
-        
+
+        def cpu_load(cpu_id: int) -> int:
+            running_load = cpu[cpu_id][0].remaining_time if cpu[cpu_id] is not None else 0
+            queued_load = sum(p.remaining_time for p in local_queues[cpu_id])
+            return running_load + queued_load
+
         
         while complete_processes < len(processes):
             while id < len(processes) and processes[id].arrival_time <= cur:
                 p = processes[id]
                 
-                target_cpu_id = min(cpu_workloader, key = cpu_workloader.get)
+                target_cpu_id = min(range(self.num_cpu), key=lambda cpu_id: (cpu_load(cpu_id), cpu_id))
                 local_queues[target_cpu_id].append(p)
-                cpu_workloader[target_cpu_id] += p.burst_time
                 id+=1
                 
             for cpu_id in range(self.num_cpu):
@@ -46,7 +48,6 @@ class PAR_FIFO(Schedule):
                     run_time = p.remaining_time
                     cpu[cpu_id] = [p, run_time, cur]
                     self.cpu_queue[cpu_id] = False
-                    cpu_workloader[cpu_id] -= p.burst_time
                 
             active_cpus = {i: state for i,state in cpu.items() if state is not None}
             if not active_cpus:
