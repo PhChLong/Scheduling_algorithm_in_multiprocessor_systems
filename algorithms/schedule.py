@@ -19,6 +19,8 @@ class Schedule(ABC):
 
         self.num_cpu:              int   = 0
         self.steps: dict[int, list[ScheduleStep]] = {} # {cpu_id, list_of_scheduleStep}
+        self.history: list[dict] = []
+        self.queue_scope: str = "global"
         
         # cập nhật bằng estimate
         self.turnaround_time:     int   = 0
@@ -35,6 +37,37 @@ class Schedule(ABC):
 
     def _copy_sorted_processes(self, processes: Processes) -> list[Process]:
         return [process.copy() for process in processes.sorted_by_arrival()]
+
+    def _reset_history(self) -> None:
+        self.history = []
+
+    def _record_history(
+        self,
+        current_time: int,
+        running: dict[int, int | None],
+        queues: dict[int, list[int]],
+        global_queue: list[int] | None = None,
+        loads: dict[int, int] | None = None,
+    ) -> None:
+        snapshot = {
+            "time": current_time,
+            "running": dict(running),
+            "queues": {cpu_id: list(queue) for cpu_id, queue in queues.items()},
+            "loads": (
+                dict(loads)
+                if loads is not None
+                else {
+                    cpu_id: len(queues.get(cpu_id, [])) + (running.get(cpu_id) is not None)
+                    for cpu_id in range(self.num_cpu)
+                }
+            ),
+        }
+        if global_queue is not None:
+            snapshot["global_queue"] = list(global_queue)
+        if self.history and self.history[-1]["time"] == current_time:
+            self.history[-1] = snapshot
+        else:
+            self.history.append(snapshot)
 
     def _update_basic_metrics(self, process_count_or_processes) -> None:
         if isinstance(process_count_or_processes, int):

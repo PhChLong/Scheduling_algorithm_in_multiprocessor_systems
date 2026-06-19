@@ -18,6 +18,7 @@ class LoadBalancing(Schedule):
         super().__init__()
         self.algorithm_name = "Load Balancing"
         self.num_cpu = num_cpu
+        self.queue_scope = "local"
         self.threshold = threshold
         self.migration_overhead = migration_overhead
         self.cpu_queues = {i: deque() for i in range(num_cpu)}

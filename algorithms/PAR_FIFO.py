@@ -8,6 +8,7 @@ class PAR_FIFO(Schedule):
         super().__init__()
         self.algorithm_name = "PAR_FIFO"
         self.num_cpu = num_cpu
+        self.queue_scope = "local"
         self.cpu_queue = { i: True for i in range(self.num_cpu)}
         #True la CPU đang rảnh, False là CPU đang bận
     
@@ -19,6 +20,7 @@ class PAR_FIFO(Schedule):
     
     def estimate(self, processes: Processes) -> None:
         self.steps = {i: [] for i in range(self.num_cpu)}
+        self._reset_history()
         self.cpu_queue = {i: True for i in range(self.num_cpu)}
         processes = self._copy_sorted_processes(processes)
         cpu = {i:None for i in range(self.num_cpu)}
@@ -48,7 +50,20 @@ class PAR_FIFO(Schedule):
                     run_time = p.remaining_time
                     cpu[cpu_id] = [p, run_time, cur]
                     self.cpu_queue[cpu_id] = False
-                
+
+            self._record_history(
+                cur,
+                running={
+                    cpu_id: state[0].id if state is not None else None
+                    for cpu_id, state in cpu.items()
+                },
+                queues={
+                    cpu_id: [process.id for process in local_queues[cpu_id]]
+                    for cpu_id in range(self.num_cpu)
+                },
+                loads={cpu_id: cpu_load(cpu_id) for cpu_id in range(self.num_cpu)},
+            )
+
             active_cpus = {i: state for i,state in cpu.items() if state is not None}
             if not active_cpus:
                 if id < len(processes):
@@ -73,7 +88,12 @@ class PAR_FIFO(Schedule):
                     cpu[cpu_id] = None
                     self.cpu_queue[cpu_id] = True
                     complete_processes +=1
-            
+        self._record_history(
+            cur,
+            running={cpu_id: None for cpu_id in range(self.num_cpu)},
+            queues={cpu_id: [] for cpu_id in range(self.num_cpu)},
+            loads={cpu_id: 0 for cpu_id in range(self.num_cpu)},
+        )
         self._update_basic_metrics(len(processes))
         return self.steps       
             

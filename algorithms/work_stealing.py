@@ -10,6 +10,7 @@ class Work_Stealing(Schedule):
         self.algorithm_name = "Work_Stealing"
         self.time_quantum = time_quantum
         self.num_cpu = num_cpu
+        self.queue_scope = "local"
         self.strat = strat
         self.migration_overhead = migration_overhead
         self.cpu_queue = {i: True for i in range(self.num_cpu)}  # True = rảnh, False = bận
@@ -36,6 +37,7 @@ class Work_Stealing(Schedule):
             self.local_deque[target].append(p)
     def estimate(self, processes: Processes) -> None:
         self.steps = {i: [] for i in range(self.num_cpu)}
+        self._reset_history()
         self.cpu_queue = {i: True for i in range(self.num_cpu)}
         self.local_deque = {i: deque() for i in range(self.num_cpu)}
         self.mapping = {}
@@ -68,6 +70,25 @@ class Work_Stealing(Schedule):
                         cpu[cpu_id] = [p, run_time, cur]
                         self.cpu_queue[cpu_id] = False
 
+            self._record_history(
+                cur,
+                running={
+                    cpu_id: state[0].id if state is not None else None
+                    for cpu_id, state in cpu.items()
+                },
+                queues={
+                    cpu_id: [process.id for process in self.local_deque[cpu_id]]
+                    for cpu_id in range(self.num_cpu)
+                },
+                loads={
+                    cpu_id: (
+                        (cpu[cpu_id][0].remaining_time if cpu[cpu_id] is not None else 0)
+                        + sum(process.remaining_time for process in self.local_deque[cpu_id])
+                    )
+                    for cpu_id in range(self.num_cpu)
+                },
+            )
+
             active_cpus = {i: state for i, state in cpu.items() if state is not None}
             if not active_cpus:
                 if id < len(processes):
@@ -97,5 +118,11 @@ class Work_Stealing(Schedule):
                     else:
                         self.local_deque[cpu_id].append(p)
 
+        self._record_history(
+            cur,
+            running={cpu_id: None for cpu_id in range(self.num_cpu)},
+            queues={cpu_id: [] for cpu_id in range(self.num_cpu)},
+            loads={cpu_id: 0 for cpu_id in range(self.num_cpu)},
+        )
         self._update_basic_metrics(len(processes))
         return self.steps

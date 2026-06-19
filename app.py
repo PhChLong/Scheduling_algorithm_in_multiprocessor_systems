@@ -641,7 +641,7 @@ def render_visualization(scheduler, rows: list[dict[str, Any]], num_cpu: int) ->
     snapshot = next(item for item in history if item["time"] == selected_time)
     migration_events = getattr(scheduler, "migration_events", None)
     events = None if migration_events is None else [event for event in migration_events if event["time"] == selected_time]
-    show_per_cpu = getattr(scheduler, 'algorithm_name', '') == 'Load Balancing'
+    show_per_cpu = getattr(scheduler, "queue_scope", "global") == "local"
     render_queue_snapshot(snapshot, events, num_cpu, pid_map, show_per_cpu_local_queues=show_per_cpu)
 
     # Build animated figure (client-side frames) and render

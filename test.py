@@ -135,11 +135,60 @@ def assert_load_balancing_history_separates_running_from_queue() -> None:
             assert running_pid not in snapshot["queues"][cpu_id]
 
 
+def assert_all_schedulers_record_queue_history() -> None:
+    ps = Processes()
+    add_process(ps, 6, 0, 1)
+    add_process(ps, 5, 0, 1)
+    add_process(ps, 4, 0, 1)
+
+    schedulers = [
+        algorithms.GLB_FIFO(num_cpu=2),
+        algorithms.GLB_RR(num_cpu=2, time_quantum=2),
+        algorithms.PAR_FIFO(num_cpu=2),
+        algorithms.CPU_Affinity(num_cpu=2, time_quantum=2, hard=True),
+        algorithms.Work_Stealing(num_cpu=2, time_quantum=2),
+        algorithms.LoadBalancing(num_cpu=2),
+    ]
+
+    for scheduler in schedulers:
+        scheduler.estimate(ps)
+        assert scheduler.history
+        assert any(
+            running_pid is not None
+            for snapshot in scheduler.history
+            for running_pid in snapshot["running"].values()
+        )
+        assert any(
+            snapshot.get("global_queue")
+            or any(snapshot["queues"].values())
+            for snapshot in scheduler.history
+        )
+        for snapshot in scheduler.history:
+            running_ids = {
+                process_id
+                for process_id in snapshot["running"].values()
+                if process_id is not None
+            }
+            waiting_ids = {
+                process_id
+                for queue in snapshot["queues"].values()
+                for process_id in queue
+            }
+            waiting_ids.update(snapshot.get("global_queue", []))
+            assert running_ids.isdisjoint(waiting_ids)
+
+        final_snapshot = scheduler.history[-1]
+        assert all(pid is None for pid in final_snapshot["running"].values())
+        assert all(not queue for queue in final_snapshot["queues"].values())
+        assert not final_snapshot.get("global_queue", [])
+
+
 def run_regression_tests() -> None:
     assert_no_input_mutation()
     assert_par_fifo_counts_running_load()
     assert_final_queues_empty()
     assert_load_balancing_history_separates_running_from_queue()
+    assert_all_schedulers_record_queue_history()
 
 
 

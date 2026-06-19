@@ -19,6 +19,7 @@ class CPU_Affinity(Schedule):
         return None, False
     def estimate(self, processes: Processes) -> None:
         self.steps = {i: [] for i in range(self.num_cpu)}
+        self._reset_history()
         self.cpu_queue = {i: True for i in range(self.num_cpu)}
         processes = self._copy_sorted_processes(processes)
         mapping = {p.id: None for p in processes}
@@ -52,7 +53,16 @@ class CPU_Affinity(Schedule):
                         run_time = min(self.time_quantum, P.remaining_time)
                         cpu[cpu_id] = [P, run_time, cur]
                         self.cpu_queue[cpu_id] = False
-                    
+
+            self._record_history(
+                cur,
+                running={
+                    cpu_id: state[0].id if state is not None else None
+                    for cpu_id, state in cpu.items()
+                },
+                queues={cpu_id: [] for cpu_id in range(self.num_cpu)},
+                global_queue=[process.id for process in queue],
+            )
 
             active_cpus = {i:state for i, state in cpu.items() if state is not None}
             if not active_cpus:
@@ -80,6 +90,11 @@ class CPU_Affinity(Schedule):
                         complete_processes += 1
                     else:
                         queue.append(p)
-                     
+        self._record_history(
+            cur,
+            running={cpu_id: None for cpu_id in range(self.num_cpu)},
+            queues={cpu_id: [] for cpu_id in range(self.num_cpu)},
+            global_queue=[],
+        )
         self._update_basic_metrics(processes)
         return self.steps
