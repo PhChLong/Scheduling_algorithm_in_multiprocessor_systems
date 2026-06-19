@@ -8,6 +8,7 @@ import streamlit as st
 
 import algorithms
 from process import Process, Processes
+from process.process import InvalidInputError, MaxProcessesError
 
 
 DEFAULT_PROCESSES = [
@@ -68,9 +69,18 @@ def process_table_df() -> pd.DataFrame:
     return pd.DataFrame(st.session_state.process_rows)
 
 
+def next_available_pid(rows: list[dict[str, Any]]) -> str:
+    used = {str(row["PID"]).strip() for row in rows}
+    index = 1
+    while f"P{index}" in used:
+        index += 1
+    return f"P{index}"
+
+
 def add_or_update_process(pid: str, arrival: int, burst: int, priority: int) -> None:
+    normalized_pid = pid.strip() or next_available_pid(st.session_state.process_rows)
     new_row = {
-        "PID": pid.strip() or f"P{len(st.session_state.process_rows) + 1}",
+        "PID": normalized_pid,
         "Arrival": int(arrival),
         "Burst": int(burst),
         "Priority": int(priority),
@@ -79,6 +89,8 @@ def add_or_update_process(pid: str, arrival: int, burst: int, priority: int) -> 
         if row["PID"] == new_row["PID"]:
             st.session_state.process_rows[idx] = new_row
             return
+    if len(st.session_state.process_rows) >= Processes.MAX:
+        raise ValueError(f"A maximum of {Processes.MAX} processes is supported.")
     st.session_state.process_rows.append(new_row)
 
 
@@ -100,12 +112,18 @@ def scheduler_metrics(scheduler, process_count: int) -> dict[str, float]:
 
 
 def gantt_dataframe(scheduler, pid_map: dict[int, str], migration_events: list[dict[str, Any]] | None = None) -> pd.DataFrame:
-    migrated_ids = {event["process_id"] for event in (migration_events or [])}
+    first_migration_time: dict[int, int] = {}
+    for event in migration_events or []:
+        process_id = event["process_id"]
+        first_migration_time[process_id] = min(
+            event["time"],
+            first_migration_time.get(process_id, event["time"]),
+        )
     rows: list[dict[str, Any]] = []
     for cpu_id, steps in scheduler.steps.items():
         for step in steps:
             pid_label = pid_map.get(step.process_id, f"P{step.process_id}")
-            if step.process_id in migrated_ids:
+            if step.begin_time >= first_migration_time.get(step.process_id, float("inf")):
                 pid_label = f"{pid_label} *"
             rows.append(
                 {
@@ -146,7 +164,17 @@ def timeline_figure(df: pd.DataFrame, num_cpu: int):
         categoryorder="array",
         categoryarray=[f"CPU {idx}" for idx in range(num_cpu, 0, -1)],
     )
-    fig.update_xaxes(tickformat="%S", title="Simulation Time")
+    max_time = int(chart_df["Finish"].max())
+    tick_step = max(1, (max_time + 9) // 10)
+    tick_values = list(range(0, max_time + 1, tick_step))
+    if not tick_values or tick_values[-1] != max_time:
+        tick_values.append(max_time)
+    fig.update_xaxes(
+        title="Simulation Time",
+        tickmode="array",
+        tickvals=[base_time + pd.to_timedelta(value, unit="s") for value in tick_values],
+        ticktext=[str(value) for value in tick_values],
+    )
     return fig
 
 
@@ -159,6 +187,35 @@ def process_color_map(pid_map: dict[int, str]) -> dict[int, str]:
     return {pid: palette[index % len(palette)] for index, pid in enumerate(sorted(pid_map))}
 
 
+def snapshot_cpu_state(snapshot: dict[str, Any], cpu_id: int) -> tuple[int | None, list[int]]:
+    queue = list(snapshot.get("queues", {}).get(cpu_id, []))
+    running = snapshot.get("running")
+    if running is None:
+        return (queue[0], queue[1:]) if queue else (None, [])
+    running_pid = running.get(cpu_id)
+    waiting_queue = [pid for pid in queue if pid != running_pid]
+    return running_pid, waiting_queue
+
+
+def snapshot_global_waiting(snapshot: dict[str, Any], num_cpu: int) -> tuple[list[int], bool]:
+    running_ids = {
+        running_pid
+        for cpu_id in range(num_cpu)
+        for running_pid, _ in [snapshot_cpu_state(snapshot, cpu_id)]
+        if running_pid is not None
+    }
+    if snapshot.get("global_queue") is not None:
+        queue = list(snapshot["global_queue"])
+        is_explicit = True
+    else:
+        queue = []
+        for cpu_id in range(num_cpu):
+            _, waiting_queue = snapshot_cpu_state(snapshot, cpu_id)
+            queue.extend(waiting_queue)
+        is_explicit = False
+    return list(dict.fromkeys(pid for pid in queue if pid not in running_ids)), is_explicit
+
+
 def build_live_figure(history: list[dict], pid_map: dict[int, str], num_cpu: int, show_per_cpu_local_queues: bool = False):
     """Build a Plotly Figure with animation frames from LoadBalancing.history.
 
@@ -166,237 +223,156 @@ def build_live_figure(history: list[dict], pid_map: dict[int, str], num_cpu: int
     Otherwise, visualize RUNNING per CPU on the left and a GLOBAL QUEUE row under CPUs ordered by enqueue time.
     """
     if not history:
-            return None
+        return None
 
     color_map = process_color_map(pid_map)
 
     frames = []
 
     if show_per_cpu_local_queues:
-            # Per-CPU visualization: find max local queue length to size figure
-            max_local_len = 0
-            for frame in history:
-                for cpu_id in range(num_cpu):
-                    q = frame.get("queues", {}).get(cpu_id, [])
-                    max_local_len = max(max_local_len, len(q))
+        # --- NHÁNH 1: HIỂN THỊ ĐA HÀNG ĐỢI CỤC BỘ (LOCAL QUEUES) ---
+        max_local_len = 1
+        for frame in history:
+            for cpu_id in range(num_cpu):
+                running_pid, waiting_queue = snapshot_cpu_state(frame, cpu_id)
+                stack_len = len(waiting_queue) + (1 if running_pid is not None else 0)
+                max_local_len = max(max_local_len, stack_len)
 
-            for frame in history:
-                t = frame["time"]
-                block_x = []
-                block_y = []
-                block_text = []
-                block_colors = []
-                annotations = []
+        for frame in history:
+            t = frame["time"]
+            block_x, block_y, block_text, block_colors = [], [], [], []
+            annotations = []
 
-                # header labels per CPU
-                header_y = max_local_len + 0.3
-                for cpu_id in range(num_cpu):
-                    col_x0 = cpu_id * 2
-                    col_x1 = col_x0 + 1
-                    annotations.append(dict(x=(col_x0 + col_x1) / 2, y=header_y, text=f"CPU {cpu_id + 1}", showarrow=False, font=dict(size=12, family="Arial", color="#000000")))
+            header_y = max_local_len + 0.3
+            for cpu_id in range(num_cpu):
+                col_x = cpu_id * 2 + 0.5
+                annotations.append(dict(x=col_x, y=header_y, text=f"CPU {cpu_id + 1}", showarrow=False, font=dict(size=12, family="Arial", color="#000000")))
 
-                # for each CPU, draw stacked queue top->down (running at top)
-                for cpu_id in range(num_cpu):
-                    q = frame.get("queues", {}).get(cpu_id, [])
-                    col_x0 = cpu_id * 2
-                    col_x1 = col_x0 + 1
-                    for idx, pid in enumerate(q):
-                        # stack downwards from header_y-0.6
-                        y_top = header_y - 0.6 - idx * 0.9
-                        y_bottom = y_top - 0.8
-                        block_x.append((col_x0 + col_x1) / 2)
-                        block_y.append((y_bottom + y_top) / 2)
-                        block_text.append(pid_map.get(pid, f"P{pid}"))
-                        block_colors.append(color_map.get(pid, "#888"))
+            for cpu_id in range(num_cpu):
+                running_pid, waiting_queue = snapshot_cpu_state(frame, cpu_id)
+                q = ([running_pid] if running_pid is not None else []) + waiting_queue
+                col_x = cpu_id * 2 + 0.5
+                for idx, pid in enumerate(q):
+                    y_center = header_y - 0.6 - idx * 0.9
+                    block_x.append(col_x)
+                    block_y.append(y_center)
+                    block_text.append(pid_map.get(pid, f"P{pid}"))
+                    block_colors.append(color_map.get(pid, "#888"))
 
-                data = [
-                    go.Scatter(
-                        x=block_x,
-                        y=block_y,
-                        mode="markers+text",
-                        text=block_text,
-                        textposition="middle center",
-                        textfont=dict(color="#000000", size=12),
-                        marker=dict(
-                            symbol="square",
-                            size=54,
-                            color=block_colors,
-                            line=dict(color="#222", width=1),
-                        ),
-                        hoverinfo="text",
-                        showlegend=False,
-                    )
-                ]
+            data = [
+                go.Scatter(
+                    x=block_x, y=block_y, mode="markers+text", text=block_text,
+                    textposition="middle center", textfont=dict(color="#000000", size=12),
+                    marker=dict(symbol="square", size=54, color=block_colors, line=dict(color="#222", width=1)),
+                    hoverinfo="text", showlegend=False
+                )
+            ]
+            frames.append(dict(name=str(t), data=data, layout=dict(annotations=annotations, title_text=f"t = {t}")))
 
-                frame_layout = dict(annotations=annotations, title_text=f"t = {t}")
-                frames.append(dict(name=str(t), data=data, layout=frame_layout))
-
-            # Build base figure
-            x_max = num_cpu * 2
-            y_max = max_local_len + 1
-            initial_data = frames[0]["data"] if frames else []
-            fig = go.Figure(data=initial_data, layout=dict(xaxis=dict(range=[0, x_max], showgrid=False, visible=False), yaxis=dict(range=[-1, y_max], showgrid=False, visible=False), height=200 + y_max * 60, margin=dict(l=40, r=16, t=40, b=16)), frames=frames)
+        x_max = num_cpu * 2
+        y_max = max_local_len + 1
+        initial_data = frames[0]["data"] if frames else []
+        fig = go.Figure(data=initial_data, layout=dict(xaxis=dict(range=[0, x_max], showgrid=False, visible=False), yaxis=dict(range=[-1, y_max], showgrid=False, visible=False), height=200 + y_max * 60, margin=dict(l=40, r=16, t=40, b=16)), frames=frames)
 
     else:
-            # Global queue visualization: need enqueue_times computed across frames
-            enqueue_times: dict[int, int] = {}
-            frames_temp = []
-            max_wait_len = 0
-            for frame in history:
-                t = frame["time"]
-                # prefer explicit global_queue if provided by scheduler (e.g., GLB_RR)
-                if "global_queue" in frame and frame["global_queue"] is not None:
-                    current_waiting = list(frame["global_queue"])  # already in order
-                else:
-                    current_waiting = []
-                    for cpu_id in range(num_cpu):
-                        q = frame.get("queues", {}).get(cpu_id, [])
-                        # waiting items are positions >=1
-                        if len(q) > 1:
-                            current_waiting.extend(q[1:])
-                current_waiting_set = list(dict.fromkeys(current_waiting))  # preserve order but unique
+        # --- NHÁNH 2: HIỂN THỊ HÀNG ĐỢI TẬP TRUNG (GLOBAL QUEUE) ---
+        # Tính toán thời gian Enqueue để phục vụ sắp xếp hàng đợi toàn cục
+        enqueue_times: dict[int, int] = {}
+        frames_temp = []
+        max_wait_len = 0
 
-                # set enqueue time for newly waiting processes
-                for pid in current_waiting_set:
-                    if pid not in enqueue_times:
-                        enqueue_times[pid] = t
+        for frame in history:
+            t = frame["time"]
+            current_waiting, is_explicit_queue = snapshot_global_waiting(frame, num_cpu)
 
-                # remove processes no longer waiting
-                for pid in list(enqueue_times.keys()):
-                    if pid not in current_waiting_set:
-                        del enqueue_times[pid]
+            for pid in current_waiting:
+                if pid not in enqueue_times:
+                    enqueue_times[pid] = t
+            for pid in list(enqueue_times.keys()):
+                if pid not in current_waiting:
+                    del enqueue_times[pid]
 
-                # order waiting by enqueue time (older first), tie-break by pid
-                waiting_sorted = sorted(current_waiting_set, key=lambda pid: (enqueue_times.get(pid, t), pid))
-                max_wait_len = max(max_wait_len, len(waiting_sorted))
-                frames_temp.append((t, waiting_sorted, frame))
-
-            # now generate frames using waiting_sorted per frame
-            processing_x0 = 0
-            processing_x1 = 1
-            for t, waiting_sorted, frame in frames_temp:
-                shapes = []
-                annotations = []
-                header_y = num_cpu + 0.3
-                annotations.append(dict(x=(processing_x0 + processing_x1) / 2, y=header_y, text="PROCESSING", showarrow=False, font=dict(size=12, family="Arial", color="#000000")))
-                annotations.append(dict(x=(processing_x1 + (processing_x1 + max_wait_len)) / 2, y=header_y, text="GLOBAL QUEUE", showarrow=False, font=dict(size=12, family="Arial", color="#000000")))
-
-                # draw running process per CPU (processing column)
-                for cpu_id in range(num_cpu):
-                    q = frame.get("queues", {}).get(cpu_id, [])
-                    if q:
-                        pid = q[0]
-                        y0 = num_cpu - cpu_id - 1
-                        y1 = y0 + 0.8
-                        color = color_map.get(pid, "#888")
-                        shapes.append(dict(type="rect", x0=processing_x0, x1=processing_x1, y0=y0, y1=y1, line=dict(color="#222", width=1), fillcolor=color))
-                        annotations.append(dict(x=(processing_x0 + processing_x1) / 2, y=(y0 + y1) / 2, text=pid_map.get(pid, f"P{pid}"), showarrow=False, font=dict(color="#000000")))
-
-                # draw global waiting row under CPUs (left-to-right)
-                waiting_y_center = -1.0
-                wy0 = waiting_y_center - 0.4
-                wy1 = waiting_y_center + 0.4
-                for idx, pid in enumerate(waiting_sorted):
-                    x0 = idx
-                    x1 = idx + 1
-                    color = color_map.get(pid, "#888")
-                    shapes.append(dict(type="rect", x0=x0, x1=x1, y0=wy0, y1=wy1, line=dict(color="#222", width=1), fillcolor=color))
-                    annotations.append(dict(x=(x0 + x1) / 2, y=(wy0 + wy1) / 2, text=pid_map.get(pid, f"P{pid}"), showarrow=False, font=dict(color="#000000")))
-
-                # add label for global queue under the row
-                annotations.append(dict(x=(max(len(waiting_sorted),1)-1)/2 if waiting_sorted else 0.5, y=wy1 + 0.3, text="GLOBAL QUEUE", showarrow=False, font=dict(size=12, family="Arial", color="#000000")))
-
-                frame_layout = dict(shapes=shapes, annotations=annotations, title_text=f"t = {t}")
-                frames.append(dict(name=str(t), layout=frame_layout))
-
-            # Build base figure (reserve space for global queue at y = -1)
-            x_max = max_wait_len + 1 if max_wait_len > 0 else 3
-            fig = go.Figure(
-                data=[],
-                layout=dict(
-                    xaxis=dict(range=[0, x_max], showgrid=False, visible=False),
-                    yaxis=dict(range=[-1.5, num_cpu + 0.5], showgrid=False, tickmode="array", tickvals=list(range(num_cpu)), ticktext=[f"CPU {num_cpu - i}" for i in range(num_cpu)], autorange=False),
-                    height=260 + num_cpu * 80,
-                    margin=dict(l=40, r=16, t=40, b=16),
-                ),
-                frames=frames,
+            waiting_order = (
+                current_waiting
+                if is_explicit_queue
+                else sorted(current_waiting, key=lambda pid: (enqueue_times.get(pid, t), pid))
             )
+            max_wait_len = max(max_wait_len, len(waiting_order))
+            frames_temp.append((t, waiting_order, frame))
 
+        # Khởi tạo tọa độ tâm cho cột xử lý
+        processing_x_center = 0.5
+        waiting_y_center = -1.0
+
+        for t, waiting_sorted, frame in frames_temp:
+            block_x, block_y, block_text, block_colors = [], [], [], []
+            annotations = []
+
+            header_y = num_cpu + 0.3
+            annotations.append(dict(x=processing_x_center, y=header_y, text="PROCESSING", showarrow=False, font=dict(size=12, family="Arial", color="#000000")))
+            annotations.append(dict(x=(1.5 + (1.5 + max_wait_len)) / 2, y=header_y, text="GLOBAL QUEUE", showarrow=False, font=dict(size=12, family="Arial", color="#000000")))
+
+            # FIX: Chuyển dữ liệu RUNNING CPU từ layout.shapes sang data (go.Scatter) để update động mượt mà
+            for cpu_id in range(num_cpu):
+                pid, _ = snapshot_cpu_state(frame, cpu_id)
+                if pid is not None:
+                    y_center = num_cpu - cpu_id - 1 + 0.4
+                    block_x.append(processing_x_center)
+                    block_y.append(y_center)
+                    block_text.append(pid_map.get(pid, f"P{pid}"))
+                    block_colors.append(color_map.get(pid, "#888"))
+
+            # FIX: Sửa lỗi đè tọa độ bằng cách dịch tâm bắt đầu từ x = 1.5 trở đi (processing chiếm từ 0 -> 1)
+            for idx, pid in enumerate(waiting_sorted):
+                x_center = 1.5 + idx
+                block_x.append(x_center)
+                block_y.append(waiting_y_center)
+                block_text.append(pid_map.get(pid, f"P{pid}"))
+                block_colors.append(color_map.get(pid, "#888"))
+
+            data = [
+                go.Scatter(
+                    x=block_x, y=block_y, mode="markers+text", text=block_text,
+                    textposition="middle center", textfont=dict(color="#000000", size=12),
+                    marker=dict(symbol="square", size=48, color=block_colors, line=dict(color="#222", width=1)),
+                    hoverinfo="text", showlegend=False
+                )
+            ]
+            frames.append(dict(name=str(t), data=data, layout=dict(annotations=annotations, title_text=f"t = {t}")))
+
+        x_max = max(max_wait_len + 2, 4)
+        initial_data = frames[0]["data"] if frames else []
+        fig = go.Figure(
+            data=initial_data,
+            layout=dict(
+                xaxis=dict(range=[0, x_max], showgrid=False, visible=False),
+                yaxis=dict(range=[-1.7, num_cpu + 0.5], showgrid=False, tickmode="array", tickvals=[i + 0.4 for i in range(num_cpu)], ticktext=[f"CPU {num_cpu - i}" for i in range(num_cpu)], autorange=False),
+                height=260 + num_cpu * 80, margin=dict(l=40, r=16, t=40, b=16)
+            ),
+            frames=frames
+        )
+
+    # Cấu hình Animation điều khiển mượt mà không delay
     if frames:
-            fig.update_layout(frames[0]["layout"])
+        fig.update_layout(frames[0]["layout"])
 
-    if not show_per_cpu_local_queues:
-        fig.update_yaxes(range=[-1.5, num_cpu + 0.5])
-
-    # animation controls
-    # Keep playback, but jump directly between recorded simulation states.
     fig.update_layout(
-        updatemenus=[
-            {
-                "type": "buttons",
-                "buttons": [
-                    {
-                        "label": "Play",
-                        "method": "animate",
-                        "args": [
-                            None,
-                            {
-                                "frame": {"duration": 500, "redraw": True},
-                                "fromcurrent": True,
-                                "transition": {"duration": 0},
-                            },
-                        ],
-                    },
-                    {
-                        "label": "Pause",
-                        "method": "animate",
-                        "args": [
-                            [None],
-                            {
-                                "frame": {"duration": 0, "redraw": False},
-                                "mode": "immediate",
-                                "transition": {"duration": 0},
-                            },
-                        ],
-                    },
-                ],
-                "direction": "left",
-                "pad": {"r": 10, "t": 10},
-                "showactive": True,
-                "x": 0.1,
-                "y": -0.05,
-            }
-        ],
-        sliders=[
-            {
-                "active": 0,
-                "y": -0.1,
-                "x": 0.1,
-                "len": 0.9,
-                "currentvalue": {"prefix": "Time: ", "visible": True},
-                "steps": [
-                    {
-                        "label": f"{frame['name']}",
-                        "method": "animate",
-                        "args": [
-                            [frame["name"]],
-                            {
-                                "frame": {"duration": 0, "redraw": True},
-                                "mode": "immediate",
-                                "transition": {"duration": 0},
-                            },
-                        ],
-                    }
-                    for frame in frames
-                ],
-            }
-        ],
+        updatemenus=[{
+            "type": "buttons",
+            "buttons": [
+                {"label": "Play", "method": "animate", "args": [None, {"frame": {"duration": 400, "redraw": True}, "fromcurrent": True, "transition": {"duration": 0}}]},
+                {"label": "Pause", "method": "animate", "args": [[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate", "transition": {"duration": 0}}]}
+            ],
+            "direction": "left", "pad": {"r": 10, "t": 10}, "showactive": True, "x": 0.1, "y": -0.05
+        }],
+        sliders=[{
+            "active": 0, "y": -0.1, "x": 0.1, "len": 0.9,
+            "currentvalue": {"prefix": "Time: ", "visible": True},
+            "steps": [{"label": f"{f['name']}", "method": "animate", "args": [[f['name']], {"frame": {"duration": 0, "redraw": True}, "mode": "immediate", "transition": {"duration": 0}}]} for f in frames]
+        }]
     )
-
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-
     return fig
-
 
 def run_schedulers(
     processes: Processes,
@@ -417,6 +393,7 @@ def run_schedulers(
             num_cpu=num_cpu,
             time_quantum=work_stealing_quantum,
             strat=work_stealing_strategy,
+            migration_overhead=migration_overhead,
         ),
         algorithms.LoadBalancing(num_cpu=num_cpu, threshold=threshold, migration_overhead=migration_overhead),
     ]
@@ -431,18 +408,21 @@ def render_process_management() -> None:
 
     with left:
         with st.form("process_form", clear_on_submit=True):
-            pid = st.text_input("Process ID", value=f"P{len(st.session_state.process_rows) + 1}")
+            pid = st.text_input("Process ID", value=next_available_pid(st.session_state.process_rows))
             arrival = st.number_input("Arrival Time", min_value=0, step=1, value=0)
             burst = st.number_input("Burst Time", min_value=1, step=1, value=5)
             priority = st.number_input("Priority", min_value=1, step=1, value=1)
-            submitted = st.form_submit_button("Save Process", use_container_width=True)
+            submitted = st.form_submit_button("Save Process", width="stretch")
             if submitted:
-                add_or_update_process(pid, arrival, burst, priority)
-                st.success(f"Saved {pid.strip() or 'new process'}.")
+                try:
+                    add_or_update_process(pid, arrival, burst, priority)
+                    st.success(f"Saved {pid.strip() or 'new process'}.")
+                except ValueError as exc:
+                    st.error(str(exc))
 
         pid_choices = [row["PID"] for row in st.session_state.process_rows]
         selected_pid = st.selectbox("Delete Process", options=pid_choices if pid_choices else [""])
-        if st.button("Remove Selected", use_container_width=True, disabled=not pid_choices):
+        if st.button("Remove Selected", width="stretch", disabled=not pid_choices):
             delete_process_row(selected_pid)
             st.success(f"Removed {selected_pid}.")
 
@@ -450,7 +430,7 @@ def render_process_management() -> None:
         edited_df = st.data_editor(
             process_table_df(),
             num_rows="dynamic",
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "PID": st.column_config.TextColumn("PID", required=True),
                 "Arrival": st.column_config.NumberColumn("Arrival", min_value=0, step=1, required=True),
@@ -459,9 +439,11 @@ def render_process_management() -> None:
             },
             key="process_editor",
         )
-        if st.button("Sync Table Changes", use_container_width=True):
+        if st.button("Sync Table Changes", width="stretch"):
             try:
                 normalized = edited_df.fillna("").to_dict(orient="records")
+                if len(normalized) > Processes.MAX:
+                    raise ValueError(f"A maximum of {Processes.MAX} processes is supported.")
                 next_rows = []
                 seen_pids = set()
                 for idx, row in enumerate(normalized):
@@ -470,6 +452,14 @@ def render_process_management() -> None:
                         st.error(f"Duplicate PID: {pid_value}")
                         return
                     seen_pids.add(pid_value)
+                    numeric_values = (row["Arrival"], row["Burst"], row["Priority"])
+                    if any(
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not float(value).is_integer()
+                        for value in numeric_values
+                    ):
+                        raise ValueError("Arrival, Burst, and Priority must be valid integers.")
                     next_rows.append(
                         {
                             "PID": pid_value,
@@ -480,8 +470,8 @@ def render_process_management() -> None:
                     )
                 st.session_state.process_rows = next_rows
                 st.success("Table changes synchronized.")
-            except (TypeError, ValueError):
-                st.error("Arrival, Burst, and Priority must be valid integers.")
+            except (TypeError, ValueError) as exc:
+                st.error(str(exc) or "Arrival, Burst, and Priority must be valid integers.")
 
 
 def render_static_evaluation(processes: Processes, rows: list[dict[str, Any]], config: dict[str, Any]):
@@ -527,7 +517,7 @@ def render_static_evaluation(processes: Processes, rows: list[dict[str, Any]], c
     )
     fig = timeline_figure(gantt_df, config["num_cpu"])
     if fig is not None:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     summary_cols = st.columns(3)
     selected_metrics = scheduler_metrics(selected_scheduler, len(rows))
@@ -535,7 +525,7 @@ def render_static_evaluation(processes: Processes, rows: list[dict[str, Any]], c
     summary_cols[1].metric("Throughput", f"{selected_metrics['throughput']:.4f}")
     summary_cols[2].metric("Migration Events", str(len(getattr(selected_scheduler, "migration_events", []))))
 
-    st.dataframe(pd.DataFrame(metric_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(metric_rows), width="stretch", hide_index=True)
     return selected_scheduler
 
 
@@ -549,6 +539,7 @@ def step_history(scheduler, num_cpu: int) -> list[dict[str, Any]]:
     history = []
     for current_time in range(min_time, max_time):
         queues = {cpu_id: [] for cpu_id in range(num_cpu)}
+        running_by_cpu = {cpu_id: None for cpu_id in range(num_cpu)}
         for cpu_id, steps in scheduler.steps.items():
             running = [
                 step.process_id
@@ -556,8 +547,15 @@ def step_history(scheduler, num_cpu: int) -> list[dict[str, Any]]:
                 if step.begin_time <= current_time < step.end_time
             ]
             if running:
-                queues[cpu_id] = [running[-1]]
-        history.append({"time": current_time, "queues": queues, "loads": {cpu_id: len(queues[cpu_id]) for cpu_id in range(num_cpu)}})
+                running_by_cpu[cpu_id] = running[-1]
+        history.append(
+            {
+                "time": current_time,
+                "running": running_by_cpu,
+                "queues": queues,
+                "loads": {cpu_id: len(queues[cpu_id]) for cpu_id in range(num_cpu)},
+            }
+        )
     return history
 
 
@@ -581,42 +579,34 @@ def render_queue_snapshot(snapshot: dict[str, Any], events: list[dict[str, Any]]
         # One column per CPU, show RUNNING + local waiting under each CPU (snapshot-like)
         cols = st.columns([1] * num_cpu)
         for cpu_id in range(num_cpu):
-            q = snapshot["queues"].get(cpu_id, [])
+            running_pid, waiting_queue = snapshot_cpu_state(snapshot, cpu_id)
             with cols[cpu_id]:
                 st.markdown(f"### CPU {cpu_id + 1}")
-                if not q:
+                if running_pid is None and not waiting_queue:
                     st.caption("Idle")
                 else:
-                    for index, process_id in enumerate(q):
+                    if running_pid is not None:
+                        label = pid_map.get(running_pid, f"P{running_pid}")
+                        st.success(f"{label} | RUNNING")
+                    for index, process_id in enumerate(waiting_queue):
                         label = pid_map.get(process_id, f"P{process_id}")
-                        if index == 0:
-                            st.success(f"{label} | RUNNING")
-                        else:
-                            st.warning(f"{label} | WAITING")
+                        st.warning(f"{index + 1}. {label}")
     else:
         # Create columns: one per CPU and one for the global waiting queue
         cols = st.columns([1] * num_cpu + [1.2])
 
         # Compute global waiting queue (prefer explicit snapshot 'global_queue')
-        if "global_queue" in snapshot and snapshot["global_queue"] is not None:
-            global_waiting = list(snapshot["global_queue"])
-        else:
-            global_waiting: list[int] = []
-            for cpu_id in range(num_cpu):
-                q = snapshot["queues"].get(cpu_id, [])
-                if len(q) > 1:
-                    global_waiting.extend(q[1:])
+        global_waiting, _ = snapshot_global_waiting(snapshot, num_cpu)
 
         # Render CPU columns showing only the RUNNING item
         for cpu_id in range(num_cpu):
-            q = snapshot["queues"].get(cpu_id, [])
+            running_pid, _ = snapshot_cpu_state(snapshot, cpu_id)
             with cols[cpu_id]:
                 st.markdown(f"### CPU {cpu_id + 1}")
-                if not q:
+                if running_pid is None:
                     st.caption("Idle")
                 else:
-                    pid = q[0]
-                    label = pid_map.get(pid, f"P{pid}")
+                    label = pid_map.get(running_pid, f"P{running_pid}")
                     st.success(f"{label} | RUNNING")
 
         # Render global waiting column
@@ -627,7 +617,7 @@ def render_queue_snapshot(snapshot: dict[str, Any], events: list[dict[str, Any]]
             else:
                 for idx, pid in enumerate(global_waiting):
                     label = pid_map.get(pid, f"P{pid}")
-                    st.warning(f"{label} | WAITING ({idx + 1})")
+                    st.warning(f"{idx + 1}. {label}")
 
 
 def render_visualization(scheduler, rows: list[dict[str, Any]], num_cpu: int) -> None:
@@ -659,7 +649,7 @@ def render_visualization(scheduler, rows: list[dict[str, Any]], num_cpu: int) ->
     if fig is None:
         st.info("No visualization frames available.")
         return
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def main() -> None:
@@ -711,7 +701,11 @@ def main() -> None:
         st.warning("Add at least one process to run the schedulers.")
         return
 
-    processes = build_processes(rows)
+    try:
+        processes = build_processes(rows)
+    except (InvalidInputError, MaxProcessesError, TypeError, ValueError) as exc:
+        st.error(f"Invalid process data: {exc}")
+        return
     config = {
         "num_cpu": num_cpu,
         "rr_quantum": rr_quantum,

@@ -113,12 +113,33 @@ def assert_final_queues_empty() -> None:
     load_balancing.estimate(ps)
     assert all(len(queue) == 0 for queue in load_balancing.cpu_queues.values())
     assert all(len(queue) == 0 for queue in load_balancing.history[-1]["queues"].values())
+    assert all(pid is None for pid in load_balancing.history[-1]["running"].values())
+
+
+def assert_load_balancing_history_separates_running_from_queue() -> None:
+    ps = Processes()
+    add_process(ps, 4, 0, 1)
+    add_process(ps, 3, 0, 1)
+    add_process(ps, 2, 1, 1)
+
+    scheduler = algorithms.LoadBalancing(num_cpu=2)
+    scheduler.estimate(ps)
+
+    assert any(
+        running_pid is not None
+        for snapshot in scheduler.history
+        for running_pid in snapshot["running"].values()
+    )
+    for snapshot in scheduler.history:
+        for cpu_id, running_pid in snapshot["running"].items():
+            assert running_pid not in snapshot["queues"][cpu_id]
 
 
 def run_regression_tests() -> None:
     assert_no_input_mutation()
     assert_par_fifo_counts_running_load()
     assert_final_queues_empty()
+    assert_load_balancing_history_separates_running_from_queue()
 
 
 

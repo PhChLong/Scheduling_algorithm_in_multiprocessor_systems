@@ -90,8 +90,12 @@ class LoadBalancing(Schedule):
         self.history.append(
             {
                 "time": current_time,
+                "running": {
+                    cpu_id: queue[0].id if queue else None
+                    for cpu_id, queue in self.cpu_queues.items()
+                },
                 "queues": {
-                    cpu_id: [process.id for process in queue]
+                    cpu_id: [process.id for process in list(queue)[1:]]
                     for cpu_id, queue in self.cpu_queues.items()
                 },
                 "loads": {
