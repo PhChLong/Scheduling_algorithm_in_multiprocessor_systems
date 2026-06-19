@@ -101,10 +101,17 @@ class LoadBalancing(Schedule):
             }
         )
 
+    # def _assign_new_arrivals(self, processes: list[Process], next_index: int, current_time: int) -> int:
+    #     """Dua cac process da den vao CPU co tai nho nhat tai thoi diem hien tai."""
+    #     while next_index < len(processes) and processes[next_index].arrival_time <= current_time:
+    #         target_cpu = self._least_loaded_cpu()
+    #         self.cpu_queues[target_cpu].append(processes[next_index])
+    #         next_index += 1
+    #     return next_index
+
     def _assign_new_arrivals(self, processes: list[Process], next_index: int, current_time: int) -> int:
-        """Dua cac process da den vao CPU co tai nho nhat tai thoi diem hien tai."""
         while next_index < len(processes) and processes[next_index].arrival_time <= current_time:
-            target_cpu = self._least_loaded_cpu()
+            target_cpu = next_index % self.num_cpu  # round-robin thay vì least-loaded
             self.cpu_queues[target_cpu].append(processes[next_index])
             next_index += 1
         return next_index
