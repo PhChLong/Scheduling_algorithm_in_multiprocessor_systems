@@ -21,25 +21,14 @@ class LoadBalancing(Schedule):
         self.migration_overhead = migration_overhead
         self.threshold = max(1, 2 * migration_overhead)
         self.cpu_queues = {i: deque() for i in range(num_cpu)}
-        self.history: list[dict] = []
         self.migration_events: list[dict] = []
-        self._history: list[dict] = []
 
     def _reset(self):
         """Reset toan bo trang thai mo phong truoc khi estimate bo process moi."""
         self.steps = {i: [] for i in range(self.num_cpu)}
         self.cpu_queues = {i: deque() for i in range(self.num_cpu)}
-        self.history = []
+        self._reset_history()
         self.migration_events = []
-        self._history = self.history
-
-    def _normalize_processes(self, processes: Processes) -> list[Process]:
-        """Copy roi sort process theo arrival time.
-
-        Ham nay tranh sua truc tiep input vi trong luc mo phong
-        `remaining_time` se bi giam dan.
-        """
-        return [p.copy() for p in processes.sorted_by_arrival()]
 
     def _cpu_load(self, cpu_id: int) -> int:
         """Tinh tong remaining_time cua toan bo queue tren mot CPU."""
@@ -58,11 +47,8 @@ class LoadBalancing(Schedule):
             key=lambda cpu_id: (self._cpu_load(cpu_id), len(self.cpu_queues[cpu_id]), cpu_id),
         )
 
-    def _busiest_cpu(self, exclude: int | None = None, exclude_set: set[int] | None = None) -> int | None:
+    def _busiest_cpu(self, excluded: set[int]) -> int | None:
         """Tra ve CPU ban nhat, co the bo qua mot CPU neu can."""
-        excluded = set() if exclude_set is None else set(exclude_set)
-        if exclude is not None:
-            excluded.add(exclude)
         candidates = [cpu_id for cpu_id in range(self.num_cpu) if cpu_id not in excluded]
         if not candidates:
             return None
@@ -87,45 +73,36 @@ class LoadBalancing(Schedule):
 
     def _record_state(self, current_time: int):
         """Luu snapshot queue/load tai moi moc thoi gian de debug hoac ve UI."""
-        self.history.append(
-            {
-                "time": current_time,
-                "running": {
-                    cpu_id: queue[0].id if queue else None
-                    for cpu_id, queue in self.cpu_queues.items()
-                },
-                "queues": {
-                    cpu_id: [process.id for process in list(queue)[1:]]
-                    for cpu_id, queue in self.cpu_queues.items()
-                },
-                "loads": {
-                    cpu_id: self._cpu_load(cpu_id)
-                    for cpu_id in range(self.num_cpu)
-                },
-            }
+        self._record_history(
+            current_time,
+            running={
+                cpu_id: queue[0].id if queue else None
+                for cpu_id, queue in self.cpu_queues.items()
+            },
+            queues={
+                cpu_id: [process.id for process in list(queue)[1:]]
+                for cpu_id, queue in self.cpu_queues.items()
+            },
+            loads={
+                cpu_id: self._cpu_load(cpu_id)
+                for cpu_id in range(self.num_cpu)
+            },
         )
-
-    # def _assign_new_arrivals(self, processes: list[Process], next_index: int, current_time: int) -> int:
-    #     """Dua cac process da den vao CPU co tai nho nhat tai thoi diem hien tai."""
-    #     while next_index < len(processes) and processes[next_index].arrival_time <= current_time:
-    #         target_cpu = self._least_loaded_cpu()
-    #         self.cpu_queues[target_cpu].append(processes[next_index])
-    #         next_index += 1
-    #     return next_index
 
     def _assign_new_arrivals(self, processes: list[Process], next_index: int, current_time: int) -> int:
         while next_index < len(processes) and processes[next_index].arrival_time <= current_time:
-            target_cpu = next_index % self.num_cpu  # round-robin thay vì least-loaded
+            target_cpu = next_index % self.num_cpu
             self.cpu_queues[target_cpu].append(processes[next_index])
             next_index += 1
         return next_index
 
-    def _migration_candidate_index(self, source_cpu_id: int) -> int | None:
+    def _try_push_migration(self, source_cpu_id: int, target_cpu_id: int, current_time: int) -> bool:
+        """Chuyen waiting process lon nhat neu no lam giam load gap."""
         source_queue = self.cpu_queues[source_cpu_id]
         if len(source_queue) <= 1:
-            return None
+            return False
 
-        return max(
+        candidate_index = max(
             range(1, len(source_queue)),
             key=lambda index: (
                 source_queue[index].remaining_time,
@@ -133,28 +110,20 @@ class LoadBalancing(Schedule):
                 -source_queue[index].id,
             ),
         )
-
-    def _pop_migration_candidate(self, source_cpu_id: int) -> Process | None:
-        source_queue = self.cpu_queues[source_cpu_id]
-        candidate_index = self._migration_candidate_index(source_cpu_id)
-        if candidate_index is None:
-            return None
+        moved_process = source_queue[candidate_index]
+        source_load = self._cpu_load(source_cpu_id)
+        target_load = self._cpu_load(target_cpu_id)
+        current_gap = abs(source_load - target_load)
+        new_gap = abs(
+            (source_load - moved_process.remaining_time)
+            - (target_load + moved_process.remaining_time + self.migration_overhead)
+        )
+        if new_gap >= current_gap:
+            return False
 
         source_queue.rotate(-candidate_index)
         migrated_process = source_queue.popleft()
         source_queue.rotate(candidate_index)
-        return migrated_process
-
-    def _migrate(self, source_cpu_id: int, target_cpu_id: int, current_time: int, reason: str) -> bool:
-        """Chuyen mot process dang cho tu source sang target.
-
-        Queue dang duoc xu ly theo FIFO nen process dang chay o index 0
-        khong bi di chuyen. Ham nay lay waiting process co remaining_time lon nhat.
-        Moi lan migrate se cong them `migration_overhead` vao remaining time.
-        """
-        migrated_process = self._pop_migration_candidate(source_cpu_id)
-        if migrated_process is None:
-            return False
 
         migrated_process.remaining_time += self.migration_overhead
         self.cpu_queues[target_cpu_id].append(migrated_process)
@@ -164,31 +133,11 @@ class LoadBalancing(Schedule):
                 "from_cpu": source_cpu_id,
                 "to_cpu": target_cpu_id,
                 "process_id": migrated_process.id,
-                "reason": reason,
+                "reason": "push",
                 "overhead": self.migration_overhead,
             }
         )
         return True
-
-    def _migration_reduces_imbalance(self, source_cpu_id: int, target_cpu_id: int) -> bool:
-        """Chi migrate neu load gap sau khi chuyen se nho hon truoc do."""
-        source_queue = self.cpu_queues[source_cpu_id]
-        if len(source_queue) <= 1:
-            return False
-
-        candidate_index = self._migration_candidate_index(source_cpu_id)
-        if candidate_index is None:
-            return False
-
-        moved_process = source_queue[candidate_index]
-        source_load = self._cpu_load(source_cpu_id)
-        target_load = self._cpu_load(target_cpu_id)
-        current_gap = abs(source_load - target_load)
-        new_gap = abs(
-            (source_load - moved_process.remaining_time)
-            - (target_load + moved_process.remaining_time + self.migration_overhead)
-        )
-        return new_gap < current_gap
 
     def push_migration(self, current_time: int, max_iterations: int | None = None):
         """CPU ban nhat chu dong day viec sang CPU ranh nhat.
@@ -204,7 +153,7 @@ class LoadBalancing(Schedule):
         failed_busiest_cpus: set[int] = set()
 
         for _ in range(max_iterations):
-            busiest_cpu_id = self._busiest_cpu(exclude_set=failed_busiest_cpus)
+            busiest_cpu_id = self._busiest_cpu(failed_busiest_cpus)
             idlest_cpu_id = self._least_loaded_cpu()
 
             if busiest_cpu_id is None or busiest_cpu_id == idlest_cpu_id:
@@ -213,11 +162,7 @@ class LoadBalancing(Schedule):
             if self._cpu_load(busiest_cpu_id) - self._cpu_load(idlest_cpu_id) <= self.threshold:
                 return
 
-            if not self._migration_reduces_imbalance(busiest_cpu_id, idlest_cpu_id):
-                failed_busiest_cpus.add(busiest_cpu_id)
-                continue
-
-            if not self._migrate(busiest_cpu_id, idlest_cpu_id, current_time, "push"):
+            if not self._try_push_migration(busiest_cpu_id, idlest_cpu_id, current_time):
                 failed_busiest_cpus.add(busiest_cpu_id)
                 continue
         return
@@ -237,7 +182,7 @@ class LoadBalancing(Schedule):
         - throughput = tong so process / tong thoi gian mo phong
         """
         self._reset()
-        processes = self._normalize_processes(process)
+        processes = self._copy_sorted_processes(process)
         total_processes = len(processes)
 
         current_time = 0

@@ -1,5 +1,6 @@
 import algorithms
 
+from collections import deque
 from process import Process, Processes
 
 
@@ -151,6 +152,76 @@ def assert_load_balancing_uses_push_only_and_derived_threshold() -> None:
     assert all(event["reason"] == "push" for event in scheduler.migration_events)
 
 
+def assert_load_balancing_push_migration_invariants() -> None:
+    scheduler = algorithms.LoadBalancing(num_cpu=2, migration_overhead=1)
+
+    running = Process(10, 0, 1)
+    running.id = 1
+    later_candidate = Process(3, 1, 1)
+    later_candidate.id = 2
+    earlier_candidate = Process(3, 0, 1)
+    earlier_candidate.id = 3
+    higher_id_candidate = Process(3, 0, 1)
+    higher_id_candidate.id = 4
+    scheduler.cpu_queues = {
+        0: deque([running, later_candidate, earlier_candidate, higher_id_candidate]),
+        1: deque(),
+    }
+
+    assert scheduler._try_push_migration(0, 1, current_time=4)
+    assert scheduler.cpu_queues[0][0] is running
+    assert list(scheduler.cpu_queues[0]) == [running, later_candidate, higher_id_candidate]
+    assert list(scheduler.cpu_queues[1]) == [earlier_candidate]
+    assert earlier_candidate.remaining_time == 4
+    assert scheduler.migration_events == [
+        {
+            "time": 4,
+            "from_cpu": 0,
+            "to_cpu": 1,
+            "process_id": 3,
+            "reason": "push",
+            "overhead": 1,
+        }
+    ]
+
+    source_running = Process(9, 0, 1)
+    source_running.id = 5
+    oversized_candidate = Process(8, 0, 1)
+    oversized_candidate.id = 6
+    target_running = Process(12, 0, 1)
+    target_running.id = 7
+    scheduler.cpu_queues = {
+        0: deque([source_running, oversized_candidate]),
+        1: deque([target_running]),
+    }
+
+    assert not scheduler._try_push_migration(0, 1, current_time=5)
+    assert list(scheduler.cpu_queues[0]) == [source_running, oversized_candidate]
+    assert list(scheduler.cpu_queues[1]) == [target_running]
+
+
+def assert_load_balancing_resets_state_between_runs() -> None:
+    scheduler = algorithms.LoadBalancing(num_cpu=2)
+
+    first = Processes()
+    add_process(first, 10, 0, 1)
+    add_process(first, 1, 0, 1)
+    add_process(first, 1, 0, 1)
+    scheduler.estimate(first)
+    assert scheduler.migration_events
+
+    second = Processes()
+    add_process(second, 1, 0, 1)
+    scheduler.estimate(second)
+
+    assert scheduler.migration_events == []
+    assert {
+        cpu_id: [(step.process_id, step.begin_time, step.end_time) for step in steps]
+        for cpu_id, steps in scheduler.steps.items()
+    } == {0: [(1, 0, 1)], 1: []}
+    assert len(scheduler.history) == 2
+
+
 def assert_all_schedulers_record_queue_history() -> None:
     ps = Processes()
     add_process(ps, 6, 0, 1)
@@ -205,6 +276,8 @@ def run_regression_tests() -> None:
     assert_final_queues_empty()
     assert_load_balancing_history_separates_running_from_queue()
     assert_load_balancing_uses_push_only_and_derived_threshold()
+    assert_load_balancing_push_migration_invariants()
+    assert_load_balancing_resets_state_between_runs()
     assert_all_schedulers_record_queue_history()
 
 
